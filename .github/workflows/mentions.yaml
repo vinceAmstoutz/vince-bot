@@ -4,11 +4,20 @@ on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository of a single comment to handle (sent by the repository's bot-mention workflow)
+        required: false
+        type: string
+      comment_id:
+        description: Id of that comment
+        required: false
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: mentions
+  group: mentions-${{ inputs.comment_id || 'scan' }}
   cancel-in-progress: false
 
 jobs:
@@ -44,17 +53,29 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           SLUG: ${{ steps.token.outputs.app-slug }}
           REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+          ONLY_REPOSITORY: ${{ inputs.repository }}
+          ONLY_COMMENT: ${{ inputs.comment_id }}
         run: |
           since=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
           selected='[]'
+          if [ -n "$ONLY_COMMENT" ]; then
+            case "$ONLY_COMMENT" in *[!0-9]*) echo '::error::comment_id must be numeric'; exit 1;; esac
+            case ",$REPOSITORIES," in *",$ONLY_REPOSITORY,"*) ;; *) echo '::error::repository is not in BOT_REPOSITORIES'; exit 1;; esac
+            REPOSITORIES=$ONLY_REPOSITORY
+          fi
           for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
-            mentions=$(gh api "repos/$OWNER/$repo/issues/comments?since=$since&per_page=100" --paginate | jq -s add \
-              | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-mentions.jq)
+            if [ -n "$ONLY_COMMENT" ]; then
+              comments=$(gh api "repos/$OWNER/$repo/issues/comments/$ONLY_COMMENT" | jq -c '[.]')
+            else
+              comments=$(gh api "repos/$OWNER/$repo/issues/comments?since=$since&per_page=100" --paginate | jq -s add)
+            fi
+            mentions=$(printf '%s' "$comments" | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-mentions.jq)
             for row in $(printf '%s' "$mentions" | jq -c '.[] | {comment_id, number, is_pr}'); do
               id=$(printf '%s' "$row" | jq -r .comment_id)
               claimed=$(gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" | jq --arg bot "$SLUG[bot]" '[.[] | select(.user.login == $bot)] | length')
               if [ "$claimed" = 0 ]; then
-                gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" -f content=eyes > /dev/null
+                gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" -f content=+1 --silent
+                gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" -f content=eyes --silent
                 body=$(printf '%s' "$mentions" | jq -r --argjson id "$id" '.[] | select(.comment_id == $id) | .body')
                 selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson row "$row" --arg body "$body" \
                   '. + [{repository: $repo, number: $row.number, kind: (if $row.is_pr then "pull-request" else "issue" end), request: $body}]')
