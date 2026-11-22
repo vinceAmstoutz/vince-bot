@@ -193,7 +193,7 @@ jobs:
         run: |
           selected='[]'
           for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
-            red=$(gh pr list -R "$OWNER/$repo" --state open --limit 50 --json number,headRefName,headRefOid,author,isCrossRepository,statusCheckRollup,commits \
+            red=$(gh pr list -R "$OWNER/$repo" --state open --limit 20 --json number,headRefName,headRefOid,author,isCrossRepository,statusCheckRollup,commits \
               | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-red-prs.jq)
             selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson red "$red" '. + [$red[] | {repository: $repo, number}]')
           done
