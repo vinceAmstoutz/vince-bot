@@ -66,7 +66,10 @@ jobs:
           bot_id: ${{ steps.identity.outputs.id }}
           bot_name: ${{ steps.identity.outputs.name }}
           prompt: Read prompts/sweep.md and follow it. Extra instructions for this sweep, if any, are in the SWEEP_FOCUS environment variable.
-          claude_args: --max-turns 60 --allowedTools "Bash(gh:*),Bash(date:*),Read,Write,Edit,Glob,Grep"
+          claude_args: |
+            --max-turns 60
+            --allowedTools "Bash(gh api -X GET:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh release view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(date:*),Read(./**),Glob,Grep(./**),Write(./memory/**),Edit(./memory/**)"
+            --disallowedTools "Read(./.git/**),Grep(./.git/**)"
 
       - name: Create the memory token
         id: memory-token
@@ -79,11 +82,16 @@ jobs:
       - name: Commit what the bot learned
         env:
           GH_TOKEN: ${{ steps.memory-token.outputs.token }}
-          BOT_NAME: ${{ steps.identity.outputs.name }}
-          BOT_ID: ${{ steps.identity.outputs.id }}
         run: |
           git add memory/
           if git diff --cached --quiet; then exit 0; fi
-          gh auth setup-git
-          git -c user.name="$BOT_NAME" -c user.email="${BOT_ID}+${BOT_NAME}@users.noreply.github.com" commit -m "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push origin HEAD:main
+          additions=$(git diff --cached --no-renames --name-only --diff-filter=AM | while read -r f; do jq -n --arg path "$f" --arg contents "$(base64 -w0 "$f")" '{path: $path, contents: $contents}'; done | jq -s .)
+          deletions=$(git diff --cached --no-renames --name-only --diff-filter=D | jq -R '{path: .}' | jq -s .)
+          jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg head "$(git rev-parse HEAD)" \
+            --arg headline "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)" \
+            --argjson additions "$additions" \
+            --argjson deletions "$deletions" \
+            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { url } } }", variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: "main"}, expectedHeadOid: $head, message: {headline: $headline}, fileChanges: {additions: $additions, deletions: $deletions}}}}' \
+            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.url
