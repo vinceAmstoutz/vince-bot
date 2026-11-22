@@ -21,7 +21,7 @@ jobs:
     name: Sweep the repositories
     if: github.event_name == 'schedule' || github.actor == github.repository_owner
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -30,8 +30,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Create the read-and-comment token for the swept repositories
-        id: sweep-token
+      - name: Create the read token for the swept repositories
+        id: read-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.BOT_CLIENT_ID }}
@@ -41,36 +41,92 @@ jobs:
           permission-actions: read
           permission-checks: read
           permission-contents: read
-          permission-issues: write
-          permission-pull-requests: write
+          permission-issues: read
+          permission-pull-requests: read
 
-      - name: Resolve the bot's git identity
-        id: identity
-        env:
-          GH_TOKEN: ${{ steps.sweep-token.outputs.token }}
-          SLUG: ${{ steps.sweep-token.outputs.app-slug }}
-        run: |
-          id=$(gh api "users/${SLUG}%5Bbot%5D" --jq .id)
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
-
-      - name: Sweep
+      - name: Draft the sweep
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         env:
-          GH_TOKEN: ${{ steps.sweep-token.outputs.token }}
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
         with:
-          github_token: ${{ steps.sweep-token.outputs.token }}
+          github_token: ${{ steps.read-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          bot_id: ${{ steps.identity.outputs.id }}
-          bot_name: ${{ steps.identity.outputs.name }}
           prompt: |
             Read prompts/sweep.md and follow it.
             Extra instructions from the owner for this sweep only, which take precedence over the prompt file: ${{ inputs.focus || 'none' }}
           claude_args: |
-            --max-turns 60
-            --allowedTools "Bash(gh api -X GET:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh release view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(date:*),Read(./**),Glob,Grep(./**),Write(./memory/**),Edit(./memory/**)"
+            --max-turns 80
+            --allowedTools "Bash(gh api -X GET:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh release view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(date:*),Read(./**),Glob,Grep(./**),Write(./memory/**),Edit(./memory/**),Write(./out/**),Edit(./out/**)"
             --disallowedTools "Read(./.git/**),Grep(./.git/**)"
+
+      - name: Fetch each repository's rules for the checker
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          echo "CONTEXT=$RUNNER_TEMP/context" >> "$GITHUB_ENV"
+          mkdir -p out
+          test -s out/posts.json || echo '[]' > out/posts.json
+          test -s out/summary.md || echo 'No drafts.' > out/summary.md
+          for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
+            dir="$RUNNER_TEMP/context/rules/$repo"
+            mkdir -p "$dir"
+            for path in CLAUDE.md AGENTS.md CONTRIBUTING.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md; do
+              file="$dir/$(printf '%s' "$path" | tr '/' '_')"
+              gh api "repos/$OWNER/$repo/contents/$path" --jq .content > "$file.b64" 2>/dev/null && base64 -d "$file.b64" > "$file" || true
+              rm -f "$file.b64"
+            done
+            gh api "repos/$OWNER/$repo/contents/.claude/rules" --jq '.[] | select(.type == "file") | .path' 2>/dev/null | while IFS= read -r path; do
+              gh api "repos/$OWNER/$repo/contents/$path" --jq .content | base64 -d > "$dir/$(printf '%s' "$path" | tr '/' '_')"
+            done || true
+          done
+
+      - name: Check the drafts before they are posted
+        uses: ./.github/actions/run-agent
+        with:
+          workdir: .
+          skill: checking-before-posting
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ github.workspace }}/out
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          required-output: verdict.json
+          max-turns: "40"
+
+      - name: Create the post token
+        id: post-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Post the approved drafts
+        env:
+          GH_TOKEN: ${{ steps.post-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          footer=$(printf '\n\n---\n_Posted by vinceAmstoutz GitHub AI bot_')
+          jq -c '.[]' out/posts.json | while IFS= read -r post; do
+            repo=$(printf '%s' "$post" | jq -r .repository)
+            case ",$REPOSITORIES," in *",$repo,"*) ;; *) echo "::warning::skipped a post for $repo"; continue;; esac
+            body="$(printf '%s' "$post" | jq -r .body)$footer"
+            case "$(printf '%s' "$post" | jq -r .kind)" in
+              comment)
+                number=$(printf '%s' "$post" | jq -r '.number')
+                case "$number" in ''|*[!0-9]*) echo '::warning::skipped a comment without a number'; continue;; esac
+                gh api "repos/$OWNER/$repo/issues/$number/comments" -f body="$body" --jq .html_url;;
+              issue)
+                gh api "repos/$OWNER/$repo/issues" -f title="$(printf '%s' "$post" | jq -r .title)" -f body="$body" --jq .html_url;;
+              *) echo '::warning::skipped a post of unknown kind';;
+            esac
+          done
 
       - name: Create the memory token
         id: memory-token
@@ -85,14 +141,69 @@ jobs:
           GH_TOKEN: ${{ steps.memory-token.outputs.token }}
         run: |
           git add memory/
-          if git diff --cached --quiet; then exit 0; fi
-          additions=$(git diff --cached --no-renames --name-only --diff-filter=AM | while read -r f; do jq -n --arg path "$f" --arg contents "$(base64 -w0 "$f")" '{path: $path, contents: $contents}'; done | jq -s .)
-          deletions=$(git diff --cached --no-renames --name-only --diff-filter=D | jq -R '{path: .}' | jq -s .)
-          jq -n \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg head "$(git rev-parse HEAD)" \
-            --arg headline "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)" \
-            --argjson additions "$additions" \
-            --argjson deletions "$deletions" \
-            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { url } } }", variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: "main"}, expectedHeadOid: $head, message: {headline: $headline}, fileChanges: {additions: $additions, deletions: $deletions}}}}' \
+          if git diff --cached --quiet -- memory/; then exit 0; fi
+          bash scripts/commit-payload.sh . "$GITHUB_REPOSITORY" main "$(git rev-parse HEAD)" "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)" memory/ \
             | gh api graphql --input - --jq .data.createCommitOnBranch.commit.url
+
+  red-pull-requests:
+    name: Find red pull requests to fix
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the read token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-checks: read
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Select them
+        id: select
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          selected='[]'
+          for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
+            red=$(gh pr list -R "$OWNER/$repo" --state open --limit 50 --json number,headRefName,headRefOid,author,isCrossRepository,statusCheckRollup,commits \
+              | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-red-prs.jq)
+            selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson red "$red" '. + [$red[] | {repository: $repo, number}]')
+          done
+          echo "matrix=$(printf '%s' "$selected" | jq -c '.[:4]')" >> "$GITHUB_OUTPUT"
+
+  fix:
+    name: Fix the red pull request
+    needs: red-pull-requests
+    if: needs.red-pull-requests.outputs.matrix != '[]'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include: ${{ fromJSON(needs.red-pull-requests.outputs.matrix) }}
+    uses: ./.github/workflows/work.yaml
+    with:
+      repository: ${{ matrix.repository }}
+      number: ${{ matrix.number }}
+      kind: pull-request
+    secrets:
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

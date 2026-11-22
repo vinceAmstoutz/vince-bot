@@ -1,0 +1,249 @@
+name: Bot work
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        type: string
+        required: true
+      number:
+        type: number
+        required: true
+      kind:
+        type: string
+        required: true
+      request:
+        type: string
+        required: false
+        default: ""
+    secrets:
+      BOT_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository name, under the same owner
+        type: string
+        required: true
+      number:
+        description: Issue or pull request number
+        type: number
+        required: true
+      kind:
+        description: What the number is
+        type: choice
+        options:
+          - pull-request
+          - issue
+        required: true
+      request:
+        description: What to do (empty on a pull request means make its CI green)
+        type: string
+        required: false
+
+permissions: {}
+
+jobs:
+  work:
+    name: Work on ${{ inputs.repository }}#${{ inputs.number }}
+    if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: work-${{ inputs.repository }}-${{ inputs.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Check the inputs
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          KIND: ${{ inputs.kind }}
+          ALLOWED: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          case ",$ALLOWED," in *",$REPOSITORY,"*) ;; *) echo "::error::$REPOSITORY is not in BOT_REPOSITORIES"; exit 1;; esac
+          case "$KIND" in pull-request|issue) ;; *) echo "::error::unknown kind $KIND"; exit 1;; esac
+          { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
+
+      - name: Create the read token
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repository }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
+
+      - name: Fetch the task's context
+        id: context
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          NUMBER: ${{ inputs.number }}
+          KIND: ${{ inputs.kind }}
+          REQUEST: ${{ inputs.request }}
+        run: |
+          mkdir -p "$CONTEXT" "$OUT"
+          printf '%s\n' "${REQUEST:-Make this pull request's failing CI checks pass.}" > "$CONTEXT/request.md"
+          jq -n --argjson issue "$(gh api "repos/$REPO/issues/$NUMBER")" --argjson comments "$(gh api "repos/$REPO/issues/$NUMBER/comments" --paginate | jq -s add)" \
+            '{issue: $issue, comments: $comments}' > "$CONTEXT/thread.json"
+          if [ "$KIND" = pull-request ]; then
+            gh pr view "$NUMBER" -R "$REPO" --json number,title,body,author,url,headRefName,headRefOid,baseRefName,isCrossRepository,files,statusCheckRollup > "$CONTEXT/pull-request.json"
+            if [ "$(jq -r .isCrossRepository "$CONTEXT/pull-request.json")" = true ]; then echo '::error::the bot does not push to forks'; exit 1; fi
+            : > "$CONTEXT/failed-checks.md"
+            jq -c '.statusCheckRollup[] | select((.conclusion // .state) as $s | ["FAILURE","ERROR","TIMED_OUT","STARTUP_FAILURE","ACTION_REQUIRED"] | index($s))' "$CONTEXT/pull-request.json" \
+              | while IFS= read -r check; do
+                  name=$(printf '%s' "$check" | jq -r '.name // .context')
+                  url=$(printf '%s' "$check" | jq -r '.detailsUrl // .targetUrl // ""')
+                  printf '## %s\n\n%s\n\n' "$name" "$url" >> "$CONTEXT/failed-checks.md"
+                  job=$(printf '%s' "$url" | sed -n 's|.*/actions/runs/[0-9]*/job/\([0-9]*\).*|\1|p')
+                  if [ -n "$job" ]; then
+                    { echo '```text'; gh api "repos/$REPO/actions/jobs/$job/logs" 2>/dev/null | tail -n 250; echo '```'; echo; } >> "$CONTEXT/failed-checks.md"
+                  fi
+                done
+            { echo "ref=$(jq -r .headRefName "$CONTEXT/pull-request.json")"
+              echo "head=$(jq -r .headRefOid "$CONTEXT/pull-request.json")"
+              echo "branch=$(jq -r .headRefName "$CONTEXT/pull-request.json")"; } >> "$GITHUB_OUTPUT"
+          else
+            default=$(gh api "repos/$REPO" --jq .default_branch)
+            { echo "ref=$default"
+              echo "head=$(gh api "repos/$REPO/commits/$default" --jq .sha)"
+              echo "base=$default"; } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ inputs.repository }}
+          ref: ${{ steps.context.outputs.ref }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: target
+          persist-credentials: false
+
+      - name: Do the work
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: ${{ inputs.kind == 'pull-request' && inputs.request == '' && 'fixing-a-pull-request' || 'handling-a-request' }}
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+
+      - name: Check everything before it is published
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: checking-before-posting
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+          required-output: verdict.json
+          max-turns: "80"
+
+      - name: Create the write token
+        id: write-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repository }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          NUMBER: ${{ inputs.number }}
+          KIND: ${{ inputs.kind }}
+          HEAD: ${{ steps.context.outputs.head }}
+          PR_BRANCH: ${{ steps.context.outputs.branch }}
+          BASE: ${{ steps.context.outputs.base }}
+          SLUG: ${{ steps.write-token.outputs.app-slug }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          footer=$(printf '\n\n---\n_Posted by vinceAmstoutz GitHub AI bot · [run](%s)_' "$RUN_URL")
+          summary=$(cat "$OUT/summary.md")
+          if [ "$(jq -r '.approved' "$OUT/verdict.json")" != true ]; then
+            problems=$(jq -r '.problems[] | "- " + .' "$OUT/verdict.json")
+            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="@vinceAmstoutz I could not finish this, so nothing was committed.
+
+          $problems
+
+          $summary$footer" --jq .html_url
+            exit 0
+          fi
+          if [ -z "$(git -C target status --porcelain)" ]; then
+            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary$footer" --jq .html_url
+            exit 0
+          fi
+          test -s "$OUT/commit-message.txt" || { echo '::error::changes without a commit message'; exit 1; }
+          if [ "$KIND" = pull-request ]; then
+            branch=$PR_BRANCH
+          else
+            branch="$SLUG/issue-$NUMBER-$GITHUB_RUN_ID"
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$HEAD" > /dev/null
+          fi
+          commit=$(bash bot/scripts/commit-payload.sh target "$REPO" "$branch" "$HEAD" "$(cat "$OUT/commit-message.txt")" \
+            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.url)
+          if [ "$KIND" = pull-request ]; then
+            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary
+
+          Pushed $commit$footer" --jq .html_url
+          else
+            test -s "$OUT/pull-request.json" || { echo '::error::no pull-request.json for the issue'; exit 1; }
+            pr=$(gh api "repos/$REPO/pulls" -f head="$branch" -f base="$BASE" \
+              -f title="$(jq -r .title "$OUT/pull-request.json")" \
+              -f body="$(jq -r .body "$OUT/pull-request.json")
+
+          Closes #$NUMBER$footer" --jq .html_url)
+            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary
+
+          Opened $pr$footer" --jq .html_url
+          fi
+
+      - name: Report a failure
+        if: failure()
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: failure-token
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repository }}
+          permission-issues: write
+
+      - name: Comment the failure
+        if: failure() && steps.failure-token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.failure-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          NUMBER: ${{ inputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/$REPO/issues/$NUMBER/comments" -f body="@vinceAmstoutz the bot failed on this before publishing anything: see the [run]($RUN_URL).
+
+          ---
+          _Posted by vinceAmstoutz GitHub AI bot_" --jq .html_url

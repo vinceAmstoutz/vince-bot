@@ -1,0 +1,86 @@
+name: Bot mentions
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mentions
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Find the owner's mentions of the bot
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Claim the new mentions
+        id: select
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          since=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
+          selected='[]'
+          for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
+            mentions=$(gh api "repos/$OWNER/$repo/issues/comments?since=$since&per_page=100" --paginate | jq -s add \
+              | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-mentions.jq)
+            for row in $(printf '%s' "$mentions" | jq -c '.[] | {comment_id, number, is_pr}'); do
+              id=$(printf '%s' "$row" | jq -r .comment_id)
+              claimed=$(gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" | jq --arg bot "$SLUG[bot]" '[.[] | select(.user.login == $bot)] | length')
+              if [ "$claimed" = 0 ]; then
+                gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" -f content=eyes > /dev/null
+                body=$(printf '%s' "$mentions" | jq -r --argjson id "$id" '.[] | select(.comment_id == $id) | .body')
+                selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson row "$row" --arg body "$body" \
+                  '. + [{repository: $repo, number: $row.number, kind: (if $row.is_pr then "pull-request" else "issue" end), request: $body}]')
+              fi
+            done
+          done
+          echo "matrix=$(printf '%s' "$selected" | jq -c '.[:5]')" >> "$GITHUB_OUTPUT"
+
+  work:
+    name: Handle the mention
+    needs: select
+    if: needs.select.outputs.matrix != '[]'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    uses: ./.github/workflows/work.yaml
+    with:
+      repository: ${{ matrix.repository }}
+      number: ${{ matrix.number }}
+      kind: ${{ matrix.kind }}
+      request: ${{ matrix.request }}
+    secrets:
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

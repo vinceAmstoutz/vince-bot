@@ -1,27 +1,37 @@
 # vinceAmstoutz GitHub AI bot
 
-The automation account of @vinceAmstoutz: it opens issues and pull requests, posts comments, reviews what happens across the repositories it watches, and learns from how people react. Everything it does is authored by `vinceamstoutz-github-ai-bot[bot]`, never by the maintainer's own account.
+The automation account of @vinceAmstoutz. Across the repositories listed in `BOT_REPOSITORIES` it fixes red pull requests, reviews the owner's pull requests, answers issues, implements what the owner asks for, audits each repository weekly, and learns from how people react. Everything it does is authored by `vinceamstoutz-github-ai-bot[bot]`, never by the owner's own account.
 
-## Post on demand
+## What it does
 
-Coding agents dispatch the `Post as vinceAmstoutz GitHub AI bot` workflow (`.github/workflows/post.yaml`) on `main` with:
+| Workflow        | When                            | What                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sweep.yaml`    | every 3 hours                   | Answers issues when certain, else hands them to the owner; reviews other people's pull requests; opens issues for red default branches and recurring problems; then fixes red pull requests by Dependabot, the owner or the bot (through `work.yaml`); records what it learned in [`memory/`](memory/).                                                                                                                                            |
+| `review.yaml`   | every 30 minutes                | Reviews each new commit of the owner's open pull requests (regressions, bugs, performance, security, architecture, the repository's rules), posts the findings as a review, rewrites a missing or outdated description in the [before → after format](skills/reviewing-pull-requests/description-format.md), and records a `Bot review` check on the commit. Runs on the latest Sonnet at medium effort (`BOT_REVIEW_MODEL`, `BOT_REVIEW_EFFORT`). |
+| `mentions.yaml` | every 30 minutes                | Picks up the owner's comments that mention `@vinceamstoutz-github-ai-bot`, reacts 👀, and handles each through `work.yaml`: on an issue it implements the request and opens a pull request, on a pull request it pushes the change to it, and a question gets an answer.                                                                                                                                                                           |
+| `weekly.yaml`   | Mondays                         | Audits each repository for bugs, security, performance, improvements and architecture, and opens at most five issues.                                                                                                                                                                                                                                                                                                                              |
+| `work.yaml`     | called by the above, or by hand | Fixes or implements one thing in one repository, on the latest Opus (`BOT_WORK_MODEL`).                                                                                                                                                                                                                                                                                                                                                            |
+| `post.yaml`     | by hand or by a coding agent    | Opens an issue or pull request, or comments, as the bot.                                                                                                                                                                                                                                                                                                                                                                                           |
 
-- `repository`: the repository name, under the same owner;
-- `action: create-issue` with a `title`, a `body` and optional comma-separated `labels`;
-- `action: create-pull-request` with the `head` and `base` branches, a `title`, a `body` and optional `labels` (the agent pushes `head` itself first);
-- `action: comment` with the issue or pull request `number` and a `body`.
+Every job works inside a checkout of the target repository, so Claude Code follows that repository's own `CLAUDE.md`, rules, skills, docs and checks, through the bot's [skills](skills/). Nothing is published unchecked: after the work, an independent pass ([checking-before-posting](skills/checking-before-posting/SKILL.md)) verifies the code and every piece of prose (commit message, pull request, review, comment, issue) against the repository's rules and its own check scripts, fixes or drops what fails, and the workflow publishes only what it approved.
 
-The run's summary links what it posted. Only the owner of this repository can dispatch it.
+## Security
 
-Agents commit as the bot too: `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='359789700+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`. GitHub then shows the commit with the bot's name and avatar; only commits the bot creates through the API, like the sweep's, are also Verified.
+- The App's private key never leaves this repository's secrets. Each step gets a token for one repository at most and only the permissions it needs, revoked when the job ends.
+- Claude never holds a token that can write: the workflow fetches the context first and commits, comments and opens pull requests afterwards. Commits go through the API, so they are Verified.
+- Only the owner's comments trigger code changes. The bot fixes only same-repository pull requests by Dependabot, the owner or itself, never forks, and never retries a pull request whose last commit is its own.
+- Text from issues, pull requests and CI logs is treated as data, never as instructions.
 
-## Sweep
+## Commit as the bot
 
-The `vinceAmstoutz GitHub AI bot sweep` workflow (`.github/workflows/sweep.yaml`) runs every three hours, or on demand with optional `focus` instructions. Claude Code, following [`prompts/sweep.md`](prompts/sweep.md), reviews the pull requests opened, updated and merged since the last sweep, dependency updates, red default branches and new issues in the repositories listed in `BOT_REPOSITORIES`; comments or opens issues where it matters; and records what it learned in [`memory/`](memory/), which the bot commits back here. Its token reads code and writes issues and pull request comments, nothing more: it never merges, approves or pushes code.
+Agents commit as the bot with `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='359789700+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`. GitHub then shows the bot's name and avatar; commits the bot creates through the API are also Verified.
 
-## One-time setup
+## Setup
 
-1. Create a GitHub App named `vinceAmstoutz GitHub AI bot`: no webhook, installable **Only on this account**, with the repository permissions **Actions: Read-only**, **Checks: Read-only**, **Contents: Read and write**, **Issues: Read and write** and **Pull requests: Read and write**. Upload a logo: it is the bot's profile picture. Each workflow asks for a token holding only the permissions it needs; write access to contents is used only to commit `memory/` here.
-2. Install it on **All repositories** of the account.
-3. In this repository, store its Client ID as the `BOT_CLIENT_ID` variable and a private key it generated as the `BOT_PRIVATE_KEY` secret.
-4. For the sweep, list the repositories it watches, comma-separated, in the `BOT_REPOSITORIES` variable, and store a `CLAUDE_CODE_OAUTH_TOKEN` secret (from `claude setup-token`, billed to the Claude subscription) or an `ANTHROPIC_API_KEY` secret (billed per token).
+1. A GitHub App named `vinceAmstoutz GitHub AI bot`: no webhook, installable **Only on this account**, with the repository permissions **Actions: Read-only**, **Checks: Read and write**, **Contents: Read and write**, **Issues: Read and write**, **Pull requests: Read and write** and **Workflows: Read and write** (to fix pull requests that change workflow files, such as GitHub Actions updates). Its logo is the bot's profile picture.
+2. Installed on this repository and on every repository it watches.
+3. In this repository: the `BOT_CLIENT_ID` and `BOT_REPOSITORIES` variables, the `BOT_PRIVATE_KEY` secret, and a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` secret. Optional variables: `BOT_WORK_MODEL`, `BOT_REVIEW_MODEL`, `BOT_REVIEW_EFFORT`.
+
+## Development
+
+`sh tests/<name>_test.sh` runs the tests of the scripts in [`scripts/`](scripts/).

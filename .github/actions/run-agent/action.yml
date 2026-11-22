@@ -1,0 +1,79 @@
+name: Run the bot's agent
+description: Runs Claude Code in a checked-out repository with the bot's skills, without any GitHub token.
+
+inputs:
+  workdir:
+    description: Checkout to work in
+    required: true
+  skill:
+    description: Bot skill that drives the task
+    required: true
+  context-dir:
+    description: Directory holding the task's prefetched context
+    required: true
+  out-dir:
+    description: Directory the agent writes its outputs to
+    required: true
+  claude-code-oauth-token:
+    description: Claude Code OAuth token
+    required: false
+  anthropic-api-key:
+    description: Anthropic API key
+    required: false
+  max-turns:
+    description: Maximum agent turns
+    required: false
+    default: "150"
+  model:
+    description: Model or alias (opus, sonnet, ...); empty keeps Claude Code's default
+    required: false
+    default: ""
+  effort:
+    description: Effort level (low, medium, high, xhigh, max); empty keeps the default
+    required: false
+    default: ""
+  required-output:
+    description: File the agent must write in out-dir
+    required: false
+    default: summary.md
+
+runs:
+  using: composite
+  steps:
+    - name: Install Claude Code
+      shell: bash
+      run: npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.319
+
+    - name: Install the bot's skills
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.claude/skills" "$CONTEXT_DIR"
+        cp -R "$GITHUB_ACTION_PATH/../../../skills/." "$HOME/.claude/skills/"
+        cp "$GITHUB_ACTION_PATH/../../../memory/LEARNINGS.md" "$CONTEXT_DIR/LEARNINGS.md"
+        mkdir -p "$OUT_DIR"
+      env:
+        CONTEXT_DIR: ${{ inputs.context-dir }}
+        OUT_DIR: ${{ inputs.out-dir }}
+
+    - name: Run the agent
+      shell: bash
+      working-directory: ${{ inputs.workdir }}
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        AGENT_CONTEXT: ${{ inputs.context-dir }}
+        AGENT_OUT: ${{ inputs.out-dir }}
+        SKILL: ${{ inputs.skill }}
+        MAX_TURNS: ${{ inputs.max-turns }}
+        REQUIRED_OUTPUT: ${{ inputs.required-output }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+      run: |
+        if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset CLAUDE_CODE_OAUTH_TOKEN; fi
+        if [ -z "$ANTHROPIC_API_KEY" ]; then unset ANTHROPIC_API_KEY; fi
+        set -- --max-turns "$MAX_TURNS" --permission-mode acceptEdits --output-format text \
+          --allowedTools "Bash Read Write Edit MultiEdit Glob Grep WebFetch WebSearch Skill TodoWrite"
+        if [ -n "$MODEL" ]; then set -- "$@" --model "$MODEL"; fi
+        if [ -n "$EFFORT" ]; then set -- "$@" --effort "$EFFORT"; fi
+        claude -p "Use the $SKILL skill to carry out your task. The task's context is in \$AGENT_CONTEXT ($AGENT_CONTEXT); write your outputs to \$AGENT_OUT ($AGENT_OUT)." "$@"
+        test -s "$AGENT_OUT/$REQUIRED_OUTPUT" || { echo "::error::the agent did not write $REQUIRED_OUTPUT"; exit 1; }

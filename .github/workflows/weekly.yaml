@@ -1,0 +1,129 @@
+name: Bot weekly audit
+
+on:
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  repositories:
+    name: List the repositories
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Split BOT_REPOSITORIES
+        id: list
+        env:
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: echo "matrix=$(printf '%s' "$REPOSITORIES" | jq -Rc 'split(",") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+
+  audit:
+    name: Audit ${{ matrix.repository }}
+    needs: repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        repository: ${{ fromJSON(needs.repositories.outputs.matrix) }}
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Create the read token
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: read
+          permission-issues: read
+
+      - name: Fetch the open issues and labels
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+        run: |
+          { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/context" "$RUNNER_TEMP/out"
+          gh issue list -R "$REPO" --state open --limit 300 --json number,title,labels > "$RUNNER_TEMP/context/open-issues.json"
+          gh label list -R "$REPO" --limit 200 --json name > "$RUNNER_TEMP/context/labels.json"
+          printf 'Run the weekly audit of this repository.\n' > "$RUNNER_TEMP/context/request.md"
+
+      - name: Checkout the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.repository }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: target
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Audit
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: weekly-audit
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+
+      - name: Check the issues before they are opened
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: checking-before-posting
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+          required-output: verdict.json
+          max-turns: "60"
+
+      - name: Create the issues token
+        id: write-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-issues: write
+
+      - name: Open the issues
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -s "$OUT/issues.json" || { echo 'No issues to open.'; exit 0; }
+          jq -c '.[:5][]' "$OUT/issues.json" | while IFS= read -r issue; do
+            title=$(printf '%s' "$issue" | jq -r .title)
+            if jq -e --arg title "$title" 'any(.[]; .title == $title)' "$CONTEXT/open-issues.json" > /dev/null; then
+              echo "Already open: $title"; continue
+            fi
+            set -- -f title="$title" -f body="$(printf '%s' "$issue" | jq -r .body)
+
+          ---
+          _Found by vinceAmstoutz GitHub AI bot's weekly audit · [run]($RUN_URL)_"
+            while IFS= read -r label; do
+              set -- "$@" -f "labels[]=$label"
+            done < <(printf '%s' "$issue" | jq -r --slurpfile known "$CONTEXT/labels.json" '.labels // [] | .[] | select(. as $l | $known[0] | any(.name == $l))')
+            gh api "repos/$REPO/issues" "$@" --jq .html_url
+          done

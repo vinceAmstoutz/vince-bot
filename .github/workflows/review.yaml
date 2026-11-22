@@ -1,0 +1,174 @@
+name: Bot review
+
+on:
+  schedule:
+    - cron: "11,41 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: review
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Find the owner's pull requests to review
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Create the read token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-checks: read
+          permission-pull-requests: read
+
+      - name: Select pull requests whose head the bot has not reviewed
+        id: select
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          selected='[]'
+          for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
+            prs=$(gh pr list -R "$OWNER/$repo" --state open --author "$OWNER" --json number,headRefOid,isDraft,isCrossRepository \
+              --jq '[.[] | select((.isDraft or .isCrossRepository) | not)]')
+            for row in $(printf '%s' "$prs" | jq -c '.[]'); do
+              sha=$(printf '%s' "$row" | jq -r .headRefOid)
+              done=$(gh api "repos/$OWNER/$repo/commits/$sha/check-runs?check_name=Bot%20review" --jq .total_count)
+              if [ "$done" = 0 ]; then
+                selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson row "$row" '. + [{repository: $repo, number: $row.number, head: $row.headRefOid}]')
+              fi
+            done
+          done
+          echo "matrix=$(printf '%s' "$selected" | jq -c '.[:6]')" >> "$GITHUB_OUTPUT"
+
+  review:
+    name: Review ${{ matrix.repository }}#${{ matrix.number }}
+    needs: select
+    if: needs.select.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Create the read token
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Fetch the pull request
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+          NUMBER: ${{ matrix.number }}
+        run: |
+          { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/context" "$RUNNER_TEMP/out"
+          gh pr view "$NUMBER" -R "$REPO" --json number,title,body,author,url,headRefName,headRefOid,baseRefName,files,commits > "$RUNNER_TEMP/context/pull-request.json"
+          printf 'Review this pull request.\n' > "$RUNNER_TEMP/context/request.md"
+
+      - name: Checkout the pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.repository }}
+          ref: ${{ matrix.head }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Review
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: reviewing-pull-requests
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ vars.BOT_REVIEW_MODEL || 'sonnet' }}
+          effort: ${{ vars.BOT_REVIEW_EFFORT || 'medium' }}
+          required-output: review.md
+          max-turns: "80"
+
+      - name: Check the review before it is posted
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: checking-before-posting
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ vars.BOT_REVIEW_MODEL || 'sonnet' }}
+          effort: ${{ vars.BOT_REVIEW_EFFORT || 'medium' }}
+          required-output: verdict.json
+          max-turns: "40"
+
+      - name: Create the write token
+        id: write-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-checks: write
+          permission-pull-requests: write
+
+      - name: Post the review
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+          NUMBER: ${{ matrix.number }}
+          HEAD: ${{ matrix.head }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          review=$(cat "$OUT/review.md")
+          if [ "$(printf '%s' "$review" | tr -d '[:space:]')" != 'Nofindings.' ]; then
+            gh api "repos/$REPO/pulls/$NUMBER/reviews" -f commit_id="$HEAD" -f event=COMMENT \
+              -f body="$review
+
+          ---
+          _Reviewed by vinceAmstoutz GitHub AI bot · [run]($RUN_URL)_" --jq .html_url
+            conclusion=neutral
+          else
+            conclusion=success
+          fi
+          if [ -s "$OUT/pr-body.md" ] && [ "$(jq -r .approved "$OUT/verdict.json")" = true ]; then
+            current=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.body // ""')
+            if [ "$current" = "$(jq -r '.body // ""' "$CONTEXT/pull-request.json")" ]; then
+              gh api -X PATCH "repos/$REPO/pulls/$NUMBER" -F body=@"$OUT/pr-body.md" --jq .html_url
+            else
+              echo 'The description changed during the review; left as is.'
+            fi
+          fi
+          gh api "repos/$REPO/check-runs" -f name='Bot review' -f head_sha="$HEAD" -f status=completed -f conclusion="$conclusion" \
+            -f "output[title]=$(printf '%s' "$review" | head -n 1 | cut -c1-120)" -f "output[summary]=$(cat "$OUT/summary.md")" --jq .html_url
