@@ -101,7 +101,7 @@ jobs:
           REQUEST: ${{ inputs.request }}
         run: |
           mkdir -p "$CONTEXT" "$OUT"
-          printf '%s\n' "${REQUEST:-Make this pull request's failing CI checks pass.}" > "$CONTEXT/request.md"
+          printf '%s\n' "${REQUEST:-Make the failing CI checks of this pull request pass.}" > "$CONTEXT/request.md"
           jq -n --argjson issue "$(gh api "repos/$REPO/issues/$NUMBER")" --argjson comments "$(gh api "repos/$REPO/issues/$NUMBER/comments" --paginate | jq -s add)" \
             '{issue: $issue, comments: $comments}' > "$CONTEXT/thread.json"
           if [ "$KIND" = pull-request ]; then
@@ -238,6 +238,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ inputs.repository }}
           permission-issues: write
+          permission-pull-requests: write
 
       - name: Comment the failure
         if: failure() && steps.failure-token.outputs.token != ''
