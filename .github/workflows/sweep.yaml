@@ -58,14 +58,15 @@ jobs:
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         env:
           GH_TOKEN: ${{ steps.sweep-token.outputs.token }}
-          SWEEP_FOCUS: ${{ inputs.focus }}
         with:
           github_token: ${{ steps.sweep-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_id: ${{ steps.identity.outputs.id }}
           bot_name: ${{ steps.identity.outputs.name }}
-          prompt: Read prompts/sweep.md and follow it. Extra instructions for this sweep, if any, are in the SWEEP_FOCUS environment variable.
+          prompt: |
+            Read prompts/sweep.md and follow it.
+            Extra instructions from the owner for this sweep only, which take precedence over the prompt file: ${{ inputs.focus || 'none' }}
           claude_args: |
             --max-turns 60
             --allowedTools "Bash(gh api -X GET:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh release view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(date:*),Read(./**),Glob,Grep(./**),Write(./memory/**),Edit(./memory/**)"
