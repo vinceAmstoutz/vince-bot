@@ -1,0 +1,109 @@
+name: Post as Vince bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository of the owner to post in (name only, e.g. symfony-security-auditor)
+        required: true
+        type: string
+      action:
+        description: What the bot posts
+        required: true
+        type: choice
+        options:
+          - create-issue
+          - create-pull-request
+          - comment
+      number:
+        description: Issue or pull request to comment on (comment only)
+        required: false
+        type: string
+      head:
+        description: Branch holding the changes (create-pull-request only)
+        required: false
+        type: string
+      base:
+        description: Branch to merge into (create-pull-request only)
+        required: false
+        type: string
+      title:
+        description: Issue or pull request title
+        required: false
+        type: string
+      body:
+        description: Markdown body of the issue, pull request or comment
+        required: true
+        type: string
+      labels:
+        description: Comma-separated labels (issue or pull request)
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  post:
+    name: Post as Vince bot
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check the target repository
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          case "$REPOSITORY" in ''|*[!A-Za-z0-9._-]*) echo '::error::repository must be a bare repository name'; exit 1;; esac
+
+      - name: Create the bot token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repository }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Create the issue
+        if: inputs.action == 'create-issue'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          LABELS: ${{ inputs.labels }}
+        run: |
+          test -n "$TITLE" || { echo '::error::create-issue needs a title'; exit 1; }
+          set -- --title "$TITLE" --body "$BODY"
+          if [ -n "$LABELS" ]; then set -- "$@" --label "$LABELS"; fi
+          gh issue create "$@" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the pull request
+        if: inputs.action == 'create-pull-request'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          HEAD: ${{ inputs.head }}
+          BASE: ${{ inputs.base }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          LABELS: ${{ inputs.labels }}
+        run: |
+          test -n "$HEAD" && test -n "$BASE" && test -n "$TITLE" || { echo '::error::create-pull-request needs a head, a base and a title'; exit 1; }
+          url=$(gh api "repos/$GH_REPO/pulls" -f head="$HEAD" -f base="$BASE" -f title="$TITLE" -f body="$BODY" --jq .html_url)
+          if [ -n "$LABELS" ]; then gh pr edit "$url" --add-label "$LABELS"; fi
+          echo "$url" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the issue or pull request
+        if: inputs.action == 'comment'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          NUMBER: ${{ inputs.number }}
+          BODY: ${{ inputs.body }}
+        run: |
+          case "$NUMBER" in ''|*[!0-9]*) echo '::error::comment needs a numeric issue or pull request number'; exit 1;; esac
+          gh issue comment "$NUMBER" --body "$BODY" | tee -a "$GITHUB_STEP_SUMMARY"
