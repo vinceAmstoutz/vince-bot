@@ -45,4 +45,4 @@ Write your outputs in `$AGENT_OUT`, never inside the repository:
 - `commit-message.txt` (when you changed files): one commit message in the repository's convention (Conventional Commits unless it says otherwise), a subject line, a blank line, a short body. No co-author trailer, no mention of any AI tool.
 - `pull-request.json` (when told to open a pull request): `{"title": "...", "body": "..."}` following the repository's pull request template and rules.
 
-Leave the changes in the working tree uncommitted; do not run `git commit` or `git push`.
+Leave the changes in the working tree uncommitted; never run `git commit`, `git push` or anything that rewrites history. Every commit in the owner's repositories must be signed: the workflow creates the only commit through GitHub's API, which signs it, and refuses to publish one GitHub does not show as Verified.

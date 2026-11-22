@@ -26,9 +26,20 @@ Every job works inside a checkout of the target repository, so Claude Code follo
 
 This repository is public, its run logs too, while some watched repositories are private. So the agents' output never reaches the logs (it stays in files on the runner), the workflows print no link, title or text from the watched repositories, and the bot's [`memory/`](memory/) is committed only encrypted with the `BOT_MEMORY_KEY` secret. Repository names and issue or pull request numbers can still appear in job names and logs.
 
+## Signed commits (mandatory)
+
+Every commit in the owner's repositories must be signed and show as **Verified**. The bot never commits with plain git:
+
+- the fix, implement and memory jobs create their single commit through GitHub's API, which signs it;
+- `post.yaml` replaces a branch an agent pushed with one API commit before opening its pull request, so an agent's unsigned commits never reach a pull request;
+- each workflow checks the commit it made with [`scripts/assert-verified.sh`](scripts/assert-verified.sh) and fails, publishing nothing, when GitHub does not show it as Verified;
+- the agent is told never to commit, and a commit it makes locally is folded back into the signed one.
+
+Each repository enforces it on its default branch with a ruleset: **Settings → Rules → Rulesets → New branch ruleset**, target the default branch, enable **Require signed commits**. Squash merges made on GitHub are signed by GitHub, so merging still works.
+
 ## Commit as the bot
 
-Agents commit as the bot with `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='359789700+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`. GitHub then shows the bot's name and avatar; commits the bot creates through the API are also Verified.
+Agents never push to a default branch: they push a branch and open its pull request through `post.yaml`, which signs it. They commit as the bot with `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='359789700+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`. GitHub then shows the bot's name and avatar; commits the bot creates through the API are also Verified.
 
 ## Setup
 

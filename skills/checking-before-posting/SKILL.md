@@ -16,8 +16,9 @@ When `$AGENT_CONTEXT/rules/` exists, the posts target other repositories: their 
 Skip this part when `$AGENT_CONTEXT/rules/` exists: you are then in the bot's own repository, checking drafts only, and its working tree holds the bot's memory, which you must leave untouched.
 
 1. `git diff` must do only what `summary.md` says, nothing more. Revert unrelated edits.
-2. No skipped, deleted or weakened test, no suppression or ignore entry, no lowered threshold, no secret, no generated file edited by hand.
-3. Run the repository's checks that cover the changed files with the commands CI uses. Fix what fails, or revert the change and say why in `summary.md`.
+2. No local commit: the changes stay uncommitted in the working tree, because the workflow creates the one signed commit itself (`git status` shows them, `git log` shows nothing new).
+3. No skipped, deleted or weakened test, no suppression or ignore entry, no lowered threshold, no secret, no generated file edited by hand.
+4. Run the repository's checks that cover the changed files with the commands CI uses. Fix what fails, or revert the change and say why in `summary.md`.
 
 ## Check the prose
 
