@@ -13,7 +13,7 @@ Coding agents dispatch the `Post as vinceAmstoutz GitHub AI bot` workflow (`.git
 
 The run's summary links what it posted. Only the owner of this repository can dispatch it.
 
-Agents commit as the bot too: `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='<ID>+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`, where `<ID>` is printed by `gh api users/vinceamstoutz-github-ai-bot%5Bbot%5D --jq .id`. GitHub then shows the commit with the bot's name and avatar.
+Agents commit as the bot too: `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='359789700+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`. GitHub then shows the commit with the bot's name and avatar; only commits the bot creates through the API, like the sweep's, are also Verified.
 
 ## Sweep
 
