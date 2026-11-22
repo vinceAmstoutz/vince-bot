@@ -2,7 +2,7 @@
 # Args: --arg owner <login> --arg bot <app slug>
 [.[]
   | select(.user.login == $owner)
-  | select(.body | test("@\($bot)(?![A-Za-z0-9-])"; "i"))
+  | select(.body | test("@\($bot)(?![A-Za-z0-9-])|(^|\n)\\s*/bot(?![A-Za-z0-9_-])"; "i"))
   | {
       comment_id: .id,
       number: (.issue_url | split("/") | last | tonumber),

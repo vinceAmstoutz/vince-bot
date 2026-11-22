@@ -1,6 +1,6 @@
 ---
 name: handling-a-request
-description: Carry out what the owner asked when they mention the bot in an issue or pull request comment, such as "@vinceamstoutz-github-ai-bot fix this".
+description: Carry out what the owner asked when they mention the bot in an issue or pull request comment, such as "/bot fix this" or "@vinceamstoutz-github-ai-bot fix this".
 ---
 
 # Handling a request
