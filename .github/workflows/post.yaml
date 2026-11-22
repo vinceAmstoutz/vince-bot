@@ -1,4 +1,4 @@
-name: Post as Vince bot
+name: Post as vinceAmstoutz GitHub AI bot
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ permissions: {}
 
 jobs:
   post:
-    name: Post as Vince bot
+    name: Post as vinceAmstoutz GitHub AI bot
     if: github.actor == github.repository_owner
     runs-on: ubuntu-latest
     permissions: {}
