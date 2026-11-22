@@ -1,0 +1,89 @@
+name: Vince bot sweep
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: Extra instructions for this sweep only
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Sweep the repositories
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the bot's prompts and memory
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the read-and-comment token for the swept repositories
+        id: sweep-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Resolve the bot's git identity
+        id: identity
+        env:
+          GH_TOKEN: ${{ steps.sweep-token.outputs.token }}
+          SLUG: ${{ steps.sweep-token.outputs.app-slug }}
+        run: |
+          id=$(gh api "users/${SLUG}%5Bbot%5D" --jq .id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
+
+      - name: Sweep
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        env:
+          GH_TOKEN: ${{ steps.sweep-token.outputs.token }}
+          SWEEP_FOCUS: ${{ inputs.focus }}
+        with:
+          github_token: ${{ steps.sweep-token.outputs.token }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          bot_id: ${{ steps.identity.outputs.id }}
+          bot_name: ${{ steps.identity.outputs.name }}
+          prompt: Read prompts/sweep.md and follow it. Extra instructions for this sweep, if any, are in the SWEEP_FOCUS environment variable.
+          claude_args: --max-turns 60 --allowedTools "Bash(gh:*),Bash(date:*),Read,Write,Edit,Glob,Grep"
+
+      - name: Create the memory token
+        id: memory-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Commit what the bot learned
+        env:
+          GH_TOKEN: ${{ steps.memory-token.outputs.token }}
+          BOT_NAME: ${{ steps.identity.outputs.name }}
+          BOT_ID: ${{ steps.identity.outputs.id }}
+        run: |
+          git add memory/
+          if git diff --cached --quiet; then exit 0; fi
+          gh auth setup-git
+          git -c user.name="$BOT_NAME" -c user.email="${BOT_ID}+${BOT_NAME}@users.noreply.github.com" commit -m "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin HEAD:main
