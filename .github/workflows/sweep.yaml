@@ -179,6 +179,7 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-actions: read
           permission-checks: read
           permission-contents: read
           permission-pull-requests: read
