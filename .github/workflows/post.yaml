@@ -63,9 +63,10 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ inputs.repository }}
-          permission-contents: read
+          permission-contents: write
           permission-issues: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - name: Create the issue
         if: inputs.action == 'create-issue'
@@ -79,7 +80,45 @@ jobs:
           test -n "$TITLE" || { echo '::error::create-issue needs a title'; exit 1; }
           set -- --title "$TITLE" --body "$BODY"
           if [ -n "$LABELS" ]; then set -- "$@" --label "$LABELS"; fi
-          gh issue create "$@" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh issue create "$@" > /dev/null
+          echo 'Opened the issue.'
+
+      - name: Checkout the bot
+        if: inputs.action == 'create-pull-request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Replace the branch's unsigned commits with one signed commit
+        if: inputs.action == 'create-pull-request'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
+          HEAD: ${{ inputs.head }}
+          BASE: ${{ inputs.base }}
+        run: |
+          case "$HEAD/$BASE" in *[!A-Za-z0-9._/-]*) echo '::error::head and base must be branch names'; exit 1;; esac
+          head_sha=$(gh api "repos/$REPO/commits/$HEAD" --jq .sha)
+          compare=$(gh api "repos/$REPO/compare/$BASE...$head_sha")
+          if [ "$(printf '%s' "$compare" | jq '[.commits[] | select(.commit.verification.verified | not)] | length')" = 0 ]; then
+            echo 'Every commit is already signed.'; exit 0
+          fi
+          parent=$(printf '%s' "$compare" | jq -r .merge_base_commit.sha)
+          message=$(gh api "repos/$REPO/commits/$head_sha" --jq .commit.message)
+          gh auth setup-git
+          git init -q target
+          git -C target fetch -q --depth=1 "https://github.com/$REPO" "$parent" "$head_sha"
+          git -C target checkout -q "$parent"
+          git -C target read-tree -u --reset "$head_sha"
+          staging="$HEAD-signing-$GITHUB_RUN_ID"
+          gh api "repos/$REPO/git/refs" -f ref="refs/heads/$staging" -f sha="$parent" --silent
+          signed=$(bash bot/scripts/commit-payload.sh target "$REPO" "$staging" "$parent" "$message" \
+            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid) || signed=''
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$staging" --silent
+          test -n "$signed" || { echo '::error::the signed commit could not be created; the branch is unchanged'; exit 1; }
+          gh api -X PATCH "repos/$REPO/git/refs/heads/$HEAD" -f sha="$signed" -F force=true --silent
+          echo 'The branch now holds one signed commit.'
 
       - name: Create the pull request
         if: inputs.action == 'create-pull-request'
@@ -91,11 +130,17 @@ jobs:
           TITLE: ${{ inputs.title }}
           BODY: ${{ inputs.body }}
           LABELS: ${{ inputs.labels }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           test -n "$HEAD" && test -n "$BASE" && test -n "$TITLE" || { echo '::error::create-pull-request needs a head, a base and a title'; exit 1; }
-          url=$(gh api "repos/$GH_REPO/pulls" -f head="$HEAD" -f base="$BASE" -f title="$TITLE" -f body="$BODY" --jq .html_url)
+          url=$(gh api "repos/$GH_REPO/pulls?head=$OWNER:$HEAD&state=open" --jq '.[0].html_url // empty')
+          if [ -z "$url" ]; then
+            url=$(gh api "repos/$GH_REPO/pulls" -f head="$HEAD" -f base="$BASE" -f title="$TITLE" -f body="$BODY" --jq .html_url)
+            echo 'Opened the pull request.'
+          else
+            echo 'The pull request was already open.'
+          fi
           if [ -n "$LABELS" ]; then gh pr edit "$url" --add-label "$LABELS"; fi
-          echo "$url" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the issue or pull request
         if: inputs.action == 'comment'
@@ -106,4 +151,5 @@ jobs:
           BODY: ${{ inputs.body }}
         run: |
           case "$NUMBER" in ''|*[!0-9]*) echo '::error::comment needs a numeric issue or pull request number'; exit 1;; esac
-          gh issue comment "$NUMBER" --body "$BODY" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh issue comment "$NUMBER" --body "$BODY" > /dev/null
+          echo 'Posted the comment.'
