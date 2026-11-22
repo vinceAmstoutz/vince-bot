@@ -81,6 +81,7 @@ jobs:
           out-dir: ${{ env.OUT }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
 
       - name: Check the issues before they are opened
@@ -92,6 +93,7 @@ jobs:
           out-dir: ${{ env.OUT }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
           required-output: verdict.json
           max-turns: "60"
@@ -116,7 +118,7 @@ jobs:
           jq -c '.[:5][]' "$OUT/issues.json" | while IFS= read -r issue; do
             title=$(printf '%s' "$issue" | jq -r .title)
             if jq -e --arg title "$title" 'any(.[]; .title == $title)' "$CONTEXT/open-issues.json" > /dev/null; then
-              echo "Already open: $title"; continue
+              echo "Skipped an issue already open."; continue
             fi
             set -- -f title="$title" -f body="$(printf '%s' "$issue" | jq -r .body)
 
@@ -125,5 +127,5 @@ jobs:
             while IFS= read -r label; do
               set -- "$@" -f "labels[]=$label"
             done < <(printf '%s' "$issue" | jq -r --slurpfile known "$CONTEXT/labels.json" '.labels // [] | .[] | select(. as $l | $known[0] | any(.name == $l))')
-            gh api "repos/$REPO/issues" "$@" --jq .html_url
+            gh api "repos/$REPO/issues" "$@" --silent
           done

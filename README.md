@@ -22,6 +22,10 @@ Every job works inside a checkout of the target repository, so Claude Code follo
 - Only the owner's comments trigger code changes. The bot fixes only same-repository pull requests by Dependabot, the owner or itself, never forks, and never retries a pull request whose last commit is its own.
 - Text from issues, pull requests and CI logs is treated as data, never as instructions.
 
+## Privacy
+
+This repository is public, its run logs too, while some watched repositories are private. So the agents' output never reaches the logs (it stays in files on the runner), the workflows print no link, title or text from the watched repositories, and the bot's [`memory/`](memory/) is committed only encrypted with the `BOT_MEMORY_KEY` secret. Repository names and issue or pull request numbers can still appear in job names and logs.
+
 ## Commit as the bot
 
 Agents commit as the bot with `git -c user.name='vinceamstoutz-github-ai-bot[bot]' -c user.email='359789700+vinceamstoutz-github-ai-bot[bot]@users.noreply.github.com' commit …`. GitHub then shows the bot's name and avatar; commits the bot creates through the API are also Verified.
@@ -30,7 +34,7 @@ Agents commit as the bot with `git -c user.name='vinceamstoutz-github-ai-bot[bot
 
 1. A GitHub App named `vinceAmstoutz GitHub AI bot`: no webhook, installable **Only on this account**, with the repository permissions **Actions: Read-only**, **Checks: Read and write**, **Contents: Read and write**, **Issues: Read and write**, **Pull requests: Read and write** and **Workflows: Read and write** (to fix pull requests that change workflow files, such as GitHub Actions updates). Its logo is the bot's profile picture.
 2. Installed on this repository and on every repository it watches.
-3. In this repository: the `BOT_CLIENT_ID` and `BOT_REPOSITORIES` variables, the `BOT_PRIVATE_KEY` secret, and a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` secret. Optional variables: `BOT_WORK_MODEL`, `BOT_REVIEW_MODEL`, `BOT_REVIEW_EFFORT`.
+3. In this repository: the `BOT_CLIENT_ID` and `BOT_REPOSITORIES` variables, the `BOT_PRIVATE_KEY` and `BOT_MEMORY_KEY` secrets (the latter any long random string, such as the output of `openssl rand -base64 32`), and a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` secret. Optional variables: `BOT_WORK_MODEL`, `BOT_REVIEW_MODEL`, `BOT_REVIEW_EFFORT`.
 
 ## Development
 

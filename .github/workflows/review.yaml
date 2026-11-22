@@ -113,6 +113,7 @@ jobs:
           out-dir: ${{ env.OUT }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           model: ${{ vars.BOT_REVIEW_MODEL || 'sonnet' }}
           effort: ${{ vars.BOT_REVIEW_EFFORT || 'medium' }}
           required-output: review.md
@@ -127,6 +128,7 @@ jobs:
           out-dir: ${{ env.OUT }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           model: ${{ vars.BOT_REVIEW_MODEL || 'sonnet' }}
           effort: ${{ vars.BOT_REVIEW_EFFORT || 'medium' }}
           required-output: verdict.json
@@ -157,7 +159,7 @@ jobs:
               -f body="$review
 
           ---
-          _Reviewed by vinceAmstoutz GitHub AI bot · [run]($RUN_URL)_" --jq .html_url
+          _Reviewed by vinceAmstoutz GitHub AI bot · [run]($RUN_URL)_" --silent
             conclusion=neutral
           else
             conclusion=success
@@ -165,10 +167,10 @@ jobs:
           if [ -s "$OUT/pr-body.md" ] && [ "$(jq -r .approved "$OUT/verdict.json")" = true ]; then
             current=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.body // ""')
             if [ "$current" = "$(jq -r '.body // ""' "$CONTEXT/pull-request.json")" ]; then
-              gh api -X PATCH "repos/$REPO/pulls/$NUMBER" -F body=@"$OUT/pr-body.md" --jq .html_url
+              gh api -X PATCH "repos/$REPO/pulls/$NUMBER" -F body=@"$OUT/pr-body.md" --silent
             else
               echo 'The description changed during the review; left as is.'
             fi
           fi
           gh api "repos/$REPO/check-runs" -f name='Bot review' -f head_sha="$HEAD" -f status=completed -f conclusion="$conclusion" \
-            -f "output[title]=$(printf '%s' "$review" | head -n 1 | cut -c1-120)" -f "output[summary]=$(cat "$OUT/summary.md")" --jq .html_url
+            -f "output[title]=$(printf '%s' "$review" | head -n 1 | cut -c1-120)" -f "output[summary]=$(cat "$OUT/summary.md")" --silent

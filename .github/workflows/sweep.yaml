@@ -44,6 +44,14 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
 
+      - name: Decrypt the memory
+        env:
+          BOT_MEMORY_KEY: ${{ secrets.BOT_MEMORY_KEY }}
+        run: |
+          sh scripts/memory.sh decrypt memory
+          mkdir -p "$RUNNER_TEMP/memory-before"
+          cp memory/*.md "$RUNNER_TEMP/memory-before/" 2>/dev/null || true
+
       - name: Draft the sweep
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         env:
@@ -55,6 +63,8 @@ jobs:
           prompt: |
             Read prompts/sweep.md and follow it.
             Extra instructions from the owner for this sweep only, which take precedence over the prompt file: ${{ inputs.focus || 'none' }}
+          display_report: false
+          show_full_output: false
           claude_args: |
             --max-turns 80
             --allowedTools "Bash(gh api -X GET:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh release view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(date:*),Read(./**),Glob,Grep(./**),Write(./memory/**),Edit(./memory/**),Write(./out/**),Edit(./out/**)"
@@ -92,6 +102,7 @@ jobs:
           out-dir: ${{ github.workspace }}/out
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           required-output: verdict.json
           max-turns: "40"
 
@@ -121,9 +132,9 @@ jobs:
               comment)
                 number=$(printf '%s' "$post" | jq -r '.number')
                 case "$number" in ''|*[!0-9]*) echo '::warning::skipped a comment without a number'; continue;; esac
-                gh api "repos/$OWNER/$repo/issues/$number/comments" -f body="$body" --jq .html_url;;
+                gh api "repos/$OWNER/$repo/issues/$number/comments" -f body="$body" --silent;;
               issue)
-                gh api "repos/$OWNER/$repo/issues" -f title="$(printf '%s' "$post" | jq -r .title)" -f body="$body" --jq .html_url;;
+                gh api "repos/$OWNER/$repo/issues" -f title="$(printf '%s' "$post" | jq -r .title)" -f body="$body" --silent;;
               *) echo '::warning::skipped a post of unknown kind';;
             esac
           done
@@ -139,11 +150,12 @@ jobs:
       - name: Commit what the bot learned
         env:
           GH_TOKEN: ${{ steps.memory-token.outputs.token }}
+          BOT_MEMORY_KEY: ${{ secrets.BOT_MEMORY_KEY }}
         run: |
-          git add memory/
-          if git diff --cached --quiet -- memory/; then exit 0; fi
+          if diff -rq "$RUNNER_TEMP/memory-before" memory --exclude='*.enc' > /dev/null 2>&1; then exit 0; fi
+          sh scripts/memory.sh encrypt memory
           bash scripts/commit-payload.sh . "$GITHUB_REPOSITORY" main "$(git rev-parse HEAD)" "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)" memory/ \
-            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.url
+            | gh api graphql --input - --silent
 
   red-pull-requests:
     name: Find red pull requests to fix
@@ -207,3 +219,4 @@ jobs:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BOT_MEMORY_KEY: ${{ secrets.BOT_MEMORY_KEY }}

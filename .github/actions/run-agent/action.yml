@@ -32,6 +32,9 @@ inputs:
     description: Effort level (low, medium, high, xhigh, max); empty keeps the default
     required: false
     default: ""
+  memory-key:
+    description: Key that decrypts the bot's memory
+    required: false
   required-output:
     description: File the agent must write in out-dir
     required: false
@@ -49,11 +52,16 @@ runs:
       run: |
         mkdir -p "$HOME/.claude/skills" "$CONTEXT_DIR"
         cp -R "$GITHUB_ACTION_PATH/../../../skills/." "$HOME/.claude/skills/"
-        cp "$GITHUB_ACTION_PATH/../../../memory/LEARNINGS.md" "$CONTEXT_DIR/LEARNINGS.md"
+        learnings="$GITHUB_ACTION_PATH/../../../memory/LEARNINGS.md"
+        if [ ! -e "$learnings" ] && [ -e "$learnings.enc" ] && [ -n "$BOT_MEMORY_KEY" ]; then
+          sh "$GITHUB_ACTION_PATH/../../../scripts/memory.sh" decrypt "$(dirname "$learnings")" || echo '::warning::the memory could not be decrypted'
+        fi
+        if [ -e "$learnings" ]; then cp "$learnings" "$CONTEXT_DIR/LEARNINGS.md"; else : > "$CONTEXT_DIR/LEARNINGS.md"; fi
         mkdir -p "$OUT_DIR"
       env:
         CONTEXT_DIR: ${{ inputs.context-dir }}
         OUT_DIR: ${{ inputs.out-dir }}
+        BOT_MEMORY_KEY: ${{ inputs.memory-key }}
 
     - name: Run the agent
       shell: bash
@@ -75,5 +83,10 @@ runs:
           --allowedTools "Bash Read Write Edit MultiEdit Glob Grep WebFetch WebSearch Skill TodoWrite"
         if [ -n "$MODEL" ]; then set -- "$@" --model "$MODEL"; fi
         if [ -n "$EFFORT" ]; then set -- "$@" --effort "$EFFORT"; fi
-        claude -p "Use the $SKILL skill to carry out your task. The task's context is in \$AGENT_CONTEXT ($AGENT_CONTEXT); write your outputs to \$AGENT_OUT ($AGENT_OUT)." "$@"
+        log="$RUNNER_TEMP/agent-$SKILL-$(date +%s).log"
+        if ! claude -p "Use the $SKILL skill to carry out your task. The task's context is in \$AGENT_CONTEXT ($AGENT_CONTEXT); write your outputs to \$AGENT_OUT ($AGENT_OUT)." "$@" > "$log" 2>&1; then
+          echo "::error::the agent stopped with an error (its output stays off the public log)"
+          exit 1
+        fi
+        echo "The agent finished; its output stays off the public log."
         test -s "$AGENT_OUT/$REQUIRED_OUTPUT" || { echo "::error::the agent did not write $REQUIRED_OUTPUT"; exit 1; }

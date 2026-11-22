@@ -23,6 +23,8 @@ on:
         required: false
       ANTHROPIC_API_KEY:
         required: false
+      BOT_MEMORY_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       repository:
@@ -144,6 +146,7 @@ jobs:
           out-dir: ${{ env.OUT }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
 
       - name: Check everything before it is published
@@ -155,6 +158,7 @@ jobs:
           out-dir: ${{ env.OUT }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
           model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
           required-output: verdict.json
           max-turns: "80"
@@ -192,11 +196,11 @@ jobs:
 
           $problems
 
-          $summary$footer" --jq .html_url
+          $summary$footer" --silent
             exit 0
           fi
           if [ -z "$(git -C target status --porcelain)" ]; then
-            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary$footer" --jq .html_url
+            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary$footer" --silent
             exit 0
           fi
           test -s "$OUT/commit-message.txt" || { echo '::error::changes without a commit message'; exit 1; }
@@ -211,7 +215,7 @@ jobs:
           if [ "$KIND" = pull-request ]; then
             gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary
 
-          Pushed $commit$footer" --jq .html_url
+          Pushed $commit$footer" --silent
           else
             test -s "$OUT/pull-request.json" || { echo '::error::no pull-request.json for the issue'; exit 1; }
             pr=$(gh api "repos/$REPO/pulls" -f head="$branch" -f base="$BASE" \
@@ -221,7 +225,7 @@ jobs:
           Closes #$NUMBER$footer" --jq .html_url)
             gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary
 
-          Opened $pr$footer" --jq .html_url
+          Opened $pr$footer" --silent
           fi
 
       - name: Report a failure
@@ -246,4 +250,4 @@ jobs:
           gh api "repos/$REPO/issues/$NUMBER/comments" -f body="@vinceAmstoutz the bot failed on this before publishing anything: see the [run]($RUN_URL).
 
           ---
-          _Posted by vinceAmstoutz GitHub AI bot_" --jq .html_url
+          _Posted by vinceAmstoutz GitHub AI bot_" --silent
