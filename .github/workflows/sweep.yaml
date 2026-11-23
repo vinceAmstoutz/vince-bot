@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout the bot's prompts and memory
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,6 +61,10 @@ jobs:
           github_token: ${{ steps.read-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_federation_rule_id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          anthropic_organization_id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          anthropic_service_account_id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          anthropic_workspace_id: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
           prompt: |
             Read prompts/sweep.md and follow it.
             Extra instructions from the owner for this sweep only, which take precedence over the prompt file: ${{ inputs.focus || 'none' }}
@@ -103,6 +108,10 @@ jobs:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          federation-rule-id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          organization-id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          service-account-id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          workspace-id: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
           required-output: verdict.json
           max-turns: "40"
 
@@ -216,6 +225,7 @@ jobs:
     if: needs.red-pull-requests.outputs.matrix != '[]'
     permissions:
       contents: read
+      id-token: write
     strategy:
       fail-fast: false
       max-parallel: 2

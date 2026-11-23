@@ -77,6 +77,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      id-token: write
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -131,6 +132,10 @@ jobs:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          federation-rule-id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          organization-id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          service-account-id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          workspace-id: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
           model: ${{ vars.BOT_REVIEW_MODEL || 'sonnet' }}
           effort: ${{ vars.BOT_REVIEW_EFFORT || 'medium' }}
           required-output: review.md
@@ -146,6 +151,10 @@ jobs:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          federation-rule-id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          organization-id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          service-account-id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          workspace-id: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
           model: ${{ vars.BOT_REVIEW_MODEL || 'sonnet' }}
           effort: ${{ vars.BOT_REVIEW_EFFORT || 'medium' }}
           required-output: verdict.json
