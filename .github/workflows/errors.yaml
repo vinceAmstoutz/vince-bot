@@ -43,15 +43,17 @@ jobs:
           BUGSINK_TOKEN: ${{ secrets.BUGSINK_TOKEN }}
         run: |
           selected='[]'
+          [ -n "$PROJECTS" ] || { echo '::error::BOT_BUGSINK_PROJECTS is empty: set it to repository=project-id pairs'; exit 1; }
           for pair in $(printf '%s' "$PROJECTS" | tr ',' ' '); do
             repo=${pair%%=*} project=${pair#*=}
             case ",$REPOSITORIES," in *",$repo,"*) ;; *) echo '::warning::a Bugsink project maps to a repository outside BOT_REPOSITORIES'; continue;; esac
             case "$project" in ''|*[!0-9]*) echo '::warning::a Bugsink project id is not numeric'; continue;; esac
             handled=$(gh api "repos/$OWNER/$repo/issues?state=all&creator=$SLUG%5Bbot%5D&per_page=100" --paginate \
               | jq -rs '[add[] | .body // "" | scan("vince-bot:error:([0-9a-f-]+)") | .[0]] | unique')
-            errors=$(curl -fsS --max-time 30 -H "Authorization: Bearer $BUGSINK_TOKEN" \
-              "$BUGSINK_URL/api/canonical/0/issues/?project=$project&state=open&sort=last_seen&order=desc" \
-              | jq -c --argjson handled "$handled" '[.results[] | select(.id as $id | $handled | index($id) | not) | .id]')
+            open=$(curl -fsS --max-time 30 -H "Authorization: Bearer $BUGSINK_TOKEN" \
+              "$BUGSINK_URL/api/canonical/0/issues/?project=$project&state=open&sort=last_seen&order=desc")
+            errors=$(printf '%s' "$open" | jq -c --argjson handled "$handled" '[.results[] | select(.id as $id | $handled | index($id) | not) | .id]')
+            echo "Bugsink project $project: $(printf '%s' "$open" | jq '.results | length') open errors, $(printf '%s' "$errors" | jq length) not handled yet."
             selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson errors "$errors" '. + [$errors[] | {repository: $repo, reference: .}]')
           done
           echo "Found $(printf '%s' "$selected" | jq length) new production errors."
