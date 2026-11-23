@@ -132,7 +132,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/${{ inputs.repository }}
-          ref: ${{ steps.context.outputs.ref }}
+          ref: ${{ steps.context.outputs.head }}
           token: ${{ steps.read-token.outputs.token }}
           path: target
           persist-credentials: false
@@ -199,6 +199,10 @@ jobs:
           $summary$footer" --silent
             exit 0
           fi
+          if [ "$(git -C target rev-parse HEAD)" != "$HEAD" ]; then
+            echo '::warning::the agent committed locally; its changes go into the signed commit instead'
+            git -C target reset -q --soft "$HEAD"
+          fi
           if [ -z "$(git -C target status --porcelain)" ]; then
             gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary$footer" --silent
             exit 0
@@ -210,8 +214,10 @@ jobs:
             branch="$SLUG/issue-$NUMBER-$GITHUB_RUN_ID"
             gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$HEAD" > /dev/null
           fi
-          commit=$(bash bot/scripts/commit-payload.sh target "$REPO" "$branch" "$HEAD" "$(cat "$OUT/commit-message.txt")" \
-            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.url)
+          created=$(bash bot/scripts/commit-payload.sh target "$REPO" "$branch" "$HEAD" "$(cat "$OUT/commit-message.txt")" \
+            | gh api graphql --input - --jq '.data.createCommitOnBranch.commit | .oid + " " + .url')
+          sh bot/scripts/assert-verified.sh "$REPO" "${created%% *}"
+          commit=${created#* }
           if [ "$KIND" = pull-request ]; then
             gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary
 

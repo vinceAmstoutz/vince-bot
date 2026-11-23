@@ -154,8 +154,9 @@ jobs:
         run: |
           if diff -rq "$RUNNER_TEMP/memory-before" memory --exclude='*.enc' > /dev/null 2>&1; then exit 0; fi
           sh scripts/memory.sh encrypt memory
-          bash scripts/commit-payload.sh . "$GITHUB_REPOSITORY" main "$(git rev-parse HEAD)" "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)" memory/ \
-            | gh api graphql --input - --silent
+          oid=$(bash scripts/commit-payload.sh . "$GITHUB_REPOSITORY" main "$(git rev-parse HEAD)" "chore(memory): record sweep $(date -u +%Y-%m-%dT%H:%MZ)" memory/ \
+            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid)
+          sh scripts/assert-verified.sh "$GITHUB_REPOSITORY" "$oid"
 
   red-pull-requests:
     name: Find red pull requests to fix

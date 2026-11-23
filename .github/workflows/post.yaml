@@ -102,6 +102,7 @@ jobs:
           head_sha=$(gh api "repos/$REPO/commits/$HEAD" --jq .sha)
           compare=$(gh api "repos/$REPO/compare/$BASE...$head_sha")
           if [ "$(printf '%s' "$compare" | jq '[.commits[] | select(.commit.verification.verified | not)] | length')" = 0 ]; then
+            sh bot/scripts/assert-verified.sh "$REPO" $(printf '%s' "$compare" | jq -r '.commits[].sha')
             echo 'Every commit is already signed.'; exit 0
           fi
           parent=$(printf '%s' "$compare" | jq -r .merge_base_commit.sha)
@@ -117,6 +118,7 @@ jobs:
             | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid) || signed=''
           gh api -X DELETE "repos/$REPO/git/refs/heads/$staging" --silent
           test -n "$signed" || { echo '::error::the signed commit could not be created; the branch is unchanged'; exit 1; }
+          sh bot/scripts/assert-verified.sh "$REPO" "$signed"
           gh api -X PATCH "repos/$REPO/git/refs/heads/$HEAD" -f sha="$signed" -F force=true --silent
           echo 'The branch now holds one signed commit.'
 
