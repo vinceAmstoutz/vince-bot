@@ -4,11 +4,20 @@ on:
   schedule:
     - cron: "11,41 * * * *"
   workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository of a single pull request to review (sent by the repository's bot-dispatch workflow)
+        required: false
+        type: string
+      number:
+        description: Number of that pull request
+        required: false
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: review
+  group: review-${{ inputs.repository || 'scan' }}-${{ inputs.number || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -37,11 +46,19 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           OWNER: ${{ github.repository_owner }}
           REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+          ONLY_REPOSITORY: ${{ inputs.repository }}
+          ONLY_NUMBER: ${{ inputs.number }}
         run: |
           selected='[]'
+          if [ -n "$ONLY_NUMBER" ]; then
+            case "$ONLY_NUMBER" in *[!0-9]*) echo '::error::number must be numeric'; exit 1;; esac
+            case ",$REPOSITORIES," in *",$ONLY_REPOSITORY,"*) ;; *) echo '::error::repository is not in BOT_REPOSITORIES'; exit 1;; esac
+            REPOSITORIES=$ONLY_REPOSITORY
+          fi
           for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
             prs=$(gh pr list -R "$OWNER/$repo" --state open --author "$OWNER" --json number,headRefOid,isDraft,isCrossRepository \
               --jq '[.[] | select((.isDraft or .isCrossRepository) | not)]')
+            if [ -n "$ONLY_NUMBER" ]; then prs=$(printf '%s' "$prs" | jq -c --argjson n "$ONLY_NUMBER" '[.[] | select(.number == $n)]'); fi
             for row in $(printf '%s' "$prs" | jq -c '.[]'); do
               sha=$(printf '%s' "$row" | jq -r .headRefOid)
               done=$(gh api "repos/$OWNER/$repo/commits/$sha/check-runs?check_name=Bot%20review" --jq .total_count)

@@ -195,9 +195,18 @@ jobs:
         run: |
           selected='[]'
           for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
-            red=$(gh pr list -R "$OWNER/$repo" --state open --limit 20 --json number,headRefName,headRefOid,author,isCrossRepository,statusCheckRollup,commits \
-              | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-red-prs.jq)
-            selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson red "$red" '. + [$red[] | {repository: $repo, number}]')
+            prs=$(gh pr list -R "$OWNER/$repo" --state open --limit 20 --json number,headRefName,headRefOid,author,isCrossRepository,statusCheckRollup,commits)
+            red=$(printf '%s' "$prs" | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-red-prs.jq)
+            for number in $(printf '%s' "$red" | jq -r '.[].number'); do
+              head_date=$(printf '%s' "$prs" | jq -r --argjson n "$number" '.[] | select(.number == $n) | .commits[-1].committedDate')
+              last_attempt=$(gh api "repos/$OWNER/$repo/issues/$number/comments" --paginate \
+                | jq -rs --arg bot "$SLUG[bot]" '[add[] | select(.user.login == $bot) | .created_at] | max // ""')
+              if [ -n "$last_attempt" ] && [[ "$last_attempt" > "$head_date" ]]; then
+                echo "Skipped a pull request the bot already handled at its current commit."
+                continue
+              fi
+              selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson n "$number" '. + [{repository: $repo, number: $n}]')
+            done
           done
           echo "matrix=$(printf '%s' "$selected" | jq -c '.[:4]')" >> "$GITHUB_OUTPUT"
 

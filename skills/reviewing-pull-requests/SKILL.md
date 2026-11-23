@@ -9,12 +9,14 @@ description: Review a pull request against the repository's own rules and decide
 
 In a checkout, load the `working-in-a-repository` skill for how to read the repository, then read `$AGENT_CONTEXT/pull-request.json` and the diff (`git diff origin/<base>...HEAD`, after `git fetch origin <base>` if needed). During the sweep, read the same rule files with `gh api -X GET repos/{owner}/{repo}/contents/{path}` and the diff with `gh pr diff`.
 
-Look for, in order:
+Look for, in order, applying the checks of the specialist skills to the changed code and what it touches:
 
-1. **Bugs**: wrong results, unhandled cases, broken error paths, race conditions, regressions of existing behavior. Read the callers and the tests of what changed, not only the diff.
-2. **Security**: injection, missing authorization, secrets, unsafe deserialization, unpinned third-party code in CI.
-3. **Broken repository rules**: what its `CLAUDE.md`, `.claude/rules/`, skills or contributing guide forbid or require: tests, changelog entry, docs, commit and title format, pull request sections.
-4. **Missing tests** for new behavior, when the repository expects them.
+1. **Regressions and bugs** (`finding-bugs`): behavior that worked before and changes, wrong results, unhandled cases, broken error paths, race conditions. Read the callers and the tests of what changed, not only the diff.
+2. **Security** (`finding-security-issues`): access control, injection, XSS, CSRF, secrets, configuration, CI workflows.
+3. **Performance** (`finding-performance-issues`): remote calls or queries added to a request path, N+1 queries, lost HTTP caching, heavier assets.
+4. **Architecture** (`reviewing-architecture`): broken layer or design rules the repository states, misplaced responsibilities, new coupling.
+5. **Broken repository rules**: what its `CLAUDE.md`, `.claude/rules/`, skills or contributing guide forbid or require: tests, changelog entry, docs, commit and title format, pull request sections.
+6. **Missing tests** for new behavior, when the repository expects them.
 
 In a checkout, run the checks that cover the changed files when they are fast, and use failures as findings. Skip style points a linter enforces and personal preferences.
 
