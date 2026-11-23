@@ -98,8 +98,12 @@ jobs:
           HEAD: ${{ inputs.head }}
           BASE: ${{ inputs.base }}
           TITLE: ${{ inputs.title }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           case "$HEAD/$BASE" in *[!A-Za-z0-9._/-]*) echo '::error::head and base must be branch names'; exit 1;; esac
+          if [ -n "$(gh api "repos/$REPO/pulls?head=$OWNER:$HEAD&state=closed" --jq '[.[] | select(.merged_at != null)][0].number // empty')" ]; then
+            echo '::error::a pull request from this branch was already merged: push the new work to a fresh branch'; exit 1
+          fi
           head_sha=$(gh api "repos/$REPO/commits/$HEAD" --jq .sha)
           compare=$(gh api "repos/$REPO/compare/$BASE...$head_sha")
           if [ "$(printf '%s' "$compare" | jq '[.commits[] | select(.commit.verification.verified | not)] | length')" = 0 ]; then
