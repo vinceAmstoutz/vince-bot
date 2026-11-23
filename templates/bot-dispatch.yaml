@@ -1,0 +1,38 @@
+name: Bot dispatch
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  mention:
+    name: Hand the mention to the bot
+    if: github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && (contains(github.event.comment.body, '/bot') || contains(github.event.comment.body, '@vinceamstoutz-github-ai-bot'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Start the bot's mentions workflow for this comment
+        env:
+          GH_TOKEN: ${{ secrets.BOT_DISPATCH_TOKEN }}
+          REPOSITORY: ${{ github.event.repository.name }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: gh workflow run mentions.yaml -R vinceAmstoutz/vince-bot -f repository="$REPOSITORY" -f comment_id="$COMMENT_ID"
+
+  review:
+    name: Ask the bot to review the pull request
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == github.repository_owner && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Start the bot's review workflow for this pull request
+        env:
+          GH_TOKEN: ${{ secrets.BOT_DISPATCH_TOKEN }}
+          REPOSITORY: ${{ github.event.repository.name }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: gh workflow run review.yaml -R vinceAmstoutz/vince-bot -f repository="$REPOSITORY" -f number="$NUMBER"

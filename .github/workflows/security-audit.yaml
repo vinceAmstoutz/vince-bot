@@ -1,0 +1,170 @@
+name: Bot security audit
+
+on:
+  schedule:
+    - cron: "29 3 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  repositories:
+    name: List the Symfony repositories
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Create the read token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-contents: read
+
+      - name: Keep the repositories that are Symfony applications
+        id: list
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: |
+          selected='[]'
+          for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
+            if gh api "repos/$OWNER/$repo/contents/composer.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null | jq -e '.require["symfony/framework-bundle"]' > /dev/null 2>&1; then
+              selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" '. + [$repo]')
+            fi
+          done
+          echo "matrix=$selected" >> "$GITHUB_OUTPUT"
+
+  audit:
+    name: Audit ${{ matrix.repository }}
+    needs: repositories
+    if: needs.repositories.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        repository: ${{ fromJSON(needs.repositories.outputs.matrix) }}
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Create the read token
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: read
+          permission-issues: read
+
+      - name: Checkout the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.repository }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: target
+          persist-credentials: false
+
+      - name: Run the Symfony Security Auditor
+        id: audit
+        continue-on-error: true
+        uses: vinceamstoutz/symfony-security-auditor@2423ace629ee2e607a3bc65ffb9cc9a4bbe31df1 # 1.22.1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          mode: standalone
+          working-directory: target
+          format: json
+          output: ${{ runner.temp }}/security-report.json
+          fail-on-incomplete: "false"
+
+      - name: Gather the context
+        id: context
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+        run: |
+          { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/context" "$RUNNER_TEMP/out"
+          test -s "$RUNNER_TEMP/security-report.json" || { echo '::error::the auditor wrote no report'; exit 1; }
+          cp "$RUNNER_TEMP/security-report.json" "$RUNNER_TEMP/context/security-report.json"
+          gh issue list -R "$REPO" --state open --limit 300 --json number,title,labels,body > "$RUNNER_TEMP/context/open-issues.json"
+          gh label list -R "$REPO" --limit 200 --json name > "$RUNNER_TEMP/context/labels.json"
+          echo "private=$(gh api "repos/$REPO" --jq .private)" >> "$GITHUB_OUTPUT"
+          printf 'Triage the security auditor report of this repository.\n' > "$RUNNER_TEMP/context/request.md"
+
+      - name: Triage the findings
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: triaging-security-findings
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+
+      - name: Check the issues before they are opened
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: checking-before-posting
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+          required-output: verdict.json
+          max-turns: "60"
+
+      - name: Create the issues token
+        id: write-token
+        if: steps.context.outputs.private == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-issues: write
+
+      - name: Open the issues
+        if: steps.context.outputs.private == 'true'
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -s "$OUT/issues.json" || { echo 'No issues to open.'; exit 0; }
+          jq -c '.[:5][]' "$OUT/issues.json" | while IFS= read -r issue; do
+            title=$(printf '%s' "$issue" | jq -r .title)
+            if jq -e --arg title "$title" 'any(.[]; .title == $title)' "$CONTEXT/open-issues.json" > /dev/null; then
+              echo "Skipped an issue already open."; continue
+            fi
+            set -- -f title="$title" -f body="$(printf '%s' "$issue" | jq -r .body)
+
+          ---
+          _Found by vinceAmstoutz GitHub AI bot's weekly security audit · [run]($RUN_URL)_"
+            while IFS= read -r label; do
+              set -- "$@" -f "labels[]=$label"
+            done < <(printf '%s' "$issue" | jq -r --slurpfile known "$CONTEXT/labels.json" '.labels // [] | .[] | select(. as $l | $known[0] | any(.name == $l))')
+            gh api "repos/$REPO/issues" "$@" --silent
+          done
+          echo 'Opened the verified findings as issues.'

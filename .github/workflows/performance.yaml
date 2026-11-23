@@ -1,0 +1,110 @@
+name: Bot slow pages
+
+on:
+  schedule:
+    - cron: "43 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: performance
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Time every page of the sites
+    if: (github.event_name == 'schedule' || github.actor == github.repository_owner) && vars.BOT_SITES != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Create the read token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-issues: read
+          permission-pull-requests: read
+
+      - name: Time the pages listed in each sitemap
+        id: select
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+          SITES: ${{ vars.BOT_SITES }}
+          SLOW_TTFB_MS: ${{ vars.BOT_SLOW_TTFB_MS || '800' }}
+          SLOW_TOTAL_MS: ${{ vars.BOT_SLOW_TOTAL_MS || '1500' }}
+        run: |
+          selected='[]'
+          for pair in $(printf '%s' "$SITES" | tr ',' ' '); do
+            repo=${pair%%=*} site=${pair#*=}
+            case ",$REPOSITORIES," in *",$repo,"*) ;; *) echo '::warning::a site maps to a repository outside BOT_REPOSITORIES'; continue;; esac
+            sitemap=$(curl -fsSL --max-time 30 "$site/sitemap.xml" || true)
+            if printf '%s' "$sitemap" | grep -q '<sitemapindex'; then
+              children=$(printf '%s' "$sitemap" | grep -o '<loc>[^<]*</loc>' | sed 's|</\?loc>||g')
+              sitemap=$(for child in $children; do curl -fsSL --max-time 30 "$child" || true; done)
+            fi
+            urls=$(printf '%s' "$sitemap" | grep -o '<loc>[^<]*</loc>' | sed 's|</\?loc>||g' | grep "^$site" | sort -u | head -n 120)
+            [ -n "$urls" ] || urls="$site/"
+            open=$(gh api "repos/$OWNER/$repo/issues?state=open&creator=$SLUG%5Bbot%5D&per_page=100" --paginate \
+              | jq -rs '[add[] | .body // "" | scan("vince-bot:page:([^ ]+) -->") | .[0]] | unique')
+            results='[]'
+            for url in $urls; do
+              curl -s -o /dev/null --max-time 30 "$url" || true
+              samples=$(for _ in 1 2 3; do curl -s -o /dev/null --max-time 30 -w '%{time_starttransfer} %{time_total} %{size_download} %{http_code}\n' "$url" || echo '30 30 0 000'; done)
+              results=$(printf '%s' "$samples" | jq -Rsc --arg url "$url" --arg site "$site" --argjson results "$results" '
+                [split("\n")[] | select(. != "") | split(" ")] as $s
+                | ($s | map(.[0] | tonumber * 1000 | floor) | sort | .[1]) as $ttfb
+                | ($s | map(.[1] | tonumber * 1000 | floor) | sort | .[1]) as $total
+                | $results + [{url: $url, path: ($url | ltrimstr($site) | if . == "" then "/" else . end), ttfb_ms: $ttfb, total_ms: $total, bytes: ($s[0][2] | tonumber), status: $s[0][3]}]')
+            done
+            echo "Timed $(printf '%s' "$results" | jq length) pages."
+            slow=$(printf '%s' "$results" | jq -c --argjson ttfb "$SLOW_TTFB_MS" --argjson total "$SLOW_TOTAL_MS" --argjson open "$open" \
+              '[.[] | select((.ttfb_ms > $ttfb or .total_ms > $total) and (.path as $p | $open | index($p) | not))] | sort_by(-.total_ms) | .[:2]')
+            for row in $(printf '%s' "$slow" | jq -c '.[] | {url, path}'); do
+              url=$(printf '%s' "$row" | jq -r .url)
+              npx --yes lighthouse@13.6.0 "$url" --quiet --only-categories=performance --output=json --output-path="$RUNNER_TEMP/lighthouse.json" \
+                --chrome-flags='--headless=new --no-sandbox' > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/lighthouse.json"
+              audit=$(jq -c '{score: (.categories.performance.score // null), lcp_ms: (.audits["largest-contentful-paint"].numericValue // null), tbt_ms: (.audits["total-blocking-time"].numericValue // null), cls: (.audits["cumulative-layout-shift"].numericValue // null)}' "$RUNNER_TEMP/lighthouse.json" 2>/dev/null || echo '{}')
+              measurement=$(printf '%s' "$results" | jq -c --arg url "$url" '.[] | select(.url == $url)')
+              request=$(jq -rn --argjson m "$measurement" --argjson l "$audit" --arg ttfb "$SLOW_TTFB_MS" --arg total "$SLOW_TOTAL_MS" '
+                "The bot'"'"'s daily probe found this page slow. Find the cause, fix it and prove the gain, following the finding-performance-issues skill.\n\n"
+                + "- Page: \($m.url)\n- Median time to first byte: \($m.ttfb_ms) ms (threshold \($ttfb) ms)\n- Median total time: \($m.total_ms) ms (threshold \($total) ms)\n"
+                + "- Size: \($m.bytes) bytes, HTTP \($m.status)\n- Lighthouse performance score: \($l.score // "n/a"), LCP \($l.lcp_ms // "n/a") ms, TBT \($l.tbt_ms // "n/a") ms, CLS \($l.cls // "n/a")"')
+              path=$(printf '%s' "$row" | jq -r .path)
+              selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --arg path "$path" --arg request "$request" '. + [{repository: $repo, reference: $path, request: $request}]')
+            done
+          done
+          echo "Found $(printf '%s' "$selected" | jq length) slow pages to work on."
+          echo "matrix=$(printf '%s' "$selected" | jq -c '.[:2]')" >> "$GITHUB_OUTPUT"
+
+  fix:
+    name: Speed up the slow page
+    needs: probe
+    if: needs.probe.outputs.matrix != '[]' && needs.probe.outputs.matrix != ''
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.probe.outputs.matrix) }}
+    uses: ./.github/workflows/work.yaml
+    with:
+      repository: ${{ matrix.repository }}
+      kind: page
+      reference: ${{ matrix.reference }}
+      request: ${{ matrix.request }}
+    secrets:
+      BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BOT_MEMORY_KEY: ${{ secrets.BOT_MEMORY_KEY }}
