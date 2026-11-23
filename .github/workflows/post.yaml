@@ -97,6 +97,7 @@ jobs:
           REPO: ${{ github.repository_owner }}/${{ inputs.repository }}
           HEAD: ${{ inputs.head }}
           BASE: ${{ inputs.base }}
+          TITLE: ${{ inputs.title }}
         run: |
           case "$HEAD/$BASE" in *[!A-Za-z0-9._/-]*) echo '::error::head and base must be branch names'; exit 1;; esac
           head_sha=$(gh api "repos/$REPO/commits/$HEAD" --jq .sha)
@@ -106,7 +107,12 @@ jobs:
             echo 'Every commit is already signed.'; exit 0
           fi
           parent=$(printf '%s' "$compare" | jq -r .merge_base_commit.sha)
-          message=$(gh api "repos/$REPO/commits/$head_sha" --jq .commit.message)
+          subjects=$(printf '%s' "$compare" | jq -r '.commits[] | select((.parents | length) == 1) | "- " + (.commit.message | split("\n")[0])')
+          if [ "$(printf '%s\n' "$subjects" | grep -c .)" -le 1 ]; then
+            message=$(gh api "repos/$REPO/commits/$head_sha" --jq .commit.message)
+          else
+            message=$(printf '%s\n\n%s\n' "$TITLE" "$subjects")
+          fi
           gh auth setup-git
           git init -q target
           git -C target fetch -q --depth=1 "https://github.com/$REPO" "$parent" "$head_sha"

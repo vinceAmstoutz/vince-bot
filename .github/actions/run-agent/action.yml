@@ -35,6 +35,18 @@ inputs:
   memory-key:
     description: Key that decrypts the bot's memory
     required: false
+  federation-rule-id:
+    description: Anthropic workload identity federation rule (fdrl_...); with organization-id, authenticates through GitHub OIDC instead of a stored key
+    required: false
+  organization-id:
+    description: Anthropic organization UUID for workload identity federation
+    required: false
+  service-account-id:
+    description: Anthropic service account (svac_...) for workload identity federation, optional
+    required: false
+  workspace-id:
+    description: Anthropic workspace (wrkspc_...) for workload identity federation, optional
+    required: false
   required-output:
     description: File the agent must write in out-dir
     required: false
@@ -76,9 +88,36 @@ runs:
         REQUIRED_OUTPUT: ${{ inputs.required-output }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
+        FEDERATION_RULE_ID: ${{ inputs.federation-rule-id }}
+        ORGANIZATION_ID: ${{ inputs.organization-id }}
+        SERVICE_ACCOUNT_ID: ${{ inputs.service-account-id }}
+        WORKSPACE_ID: ${{ inputs.workspace-id }}
       run: |
         if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset CLAUDE_CODE_OAUTH_TOKEN; fi
         if [ -z "$ANTHROPIC_API_KEY" ]; then unset ANTHROPIC_API_KEY; fi
+        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ] && [ -n "$FEDERATION_RULE_ID" ] && [ -n "$ORGANIZATION_ID" ]; then
+          [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || { echo '::error::workload identity federation needs the id-token: write permission'; exit 1; }
+          federation=$(mktemp -d "$RUNNER_TEMP/federation-XXXXXX")
+          chmod 700 "$federation"
+          fetch_identity_token() {
+            curl -fsS --retry 3 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value > "$federation/identity-token.new"
+            chmod 600 "$federation/identity-token.new"
+            mv "$federation/identity-token.new" "$federation/identity-token"
+          }
+          fetch_identity_token
+          mkdir -p "$federation/config/configs"
+          printf '{"version": "1.0", "authentication": {"type": "oidc_federation"}}\n' > "$federation/config/configs/default.json"
+          chmod 600 "$federation/config/configs/default.json"
+          export ANTHROPIC_IDENTITY_TOKEN_FILE="$federation/identity-token" ANTHROPIC_CONFIG_DIR="$federation/config" ANTHROPIC_PROFILE=default
+          export ANTHROPIC_FEDERATION_RULE_ID="$FEDERATION_RULE_ID" ANTHROPIC_ORGANIZATION_ID="$ORGANIZATION_ID"
+          if [ -n "$SERVICE_ACCOUNT_ID" ]; then export ANTHROPIC_SERVICE_ACCOUNT_ID="$SERVICE_ACCOUNT_ID"; fi
+          if [ -n "$WORKSPACE_ID" ]; then export ANTHROPIC_WORKSPACE_ID="$WORKSPACE_ID"; fi
+          ( while sleep 240; do fetch_identity_token || echo '::warning::the OIDC identity token could not be refreshed'; done ) &
+          refresher=$!
+          trap 'kill "$refresher" 2>/dev/null; rm -rf "$federation"' EXIT
+          echo 'Authenticating to Claude through workload identity federation.'
+        fi
         set -- --max-turns "$MAX_TURNS" --permission-mode acceptEdits --output-format text \
           --allowedTools "Bash Read Write Edit MultiEdit Glob Grep WebFetch WebSearch Skill TodoWrite"
         if [ -n "$MODEL" ]; then set -- "$@" --model "$MODEL"; fi

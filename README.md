@@ -21,6 +21,7 @@ Every job works inside a checkout of the target repository, so Claude Code follo
 ## Security
 
 - The App's private key never leaves this repository's secrets. Each step gets a token for one repository at most and only the permissions it needs, revoked when the job ends.
+- With workload identity federation, no Claude key is stored anywhere: each job exchanges its short-lived GitHub OIDC token, which only `main` of this repository can obtain, for short-lived Claude credentials.
 - Claude never holds a token that can write: the workflow fetches the context first and commits, comments and opens pull requests afterwards. Commits go through the API, so they are Verified.
 - Only the owner's comments trigger code changes. The bot fixes only same-repository pull requests by Dependabot, the owner or itself, never forks, and never retries a pull request whose last commit is its own.
 - Text from issues, pull requests and CI logs is treated as data, never as instructions.
@@ -50,7 +51,8 @@ Agents never push to a default branch: they push a branch and open its pull requ
 2. Installed on this repository and on every repository it watches.
 3. In this repository:
    - variables `BOT_CLIENT_ID` and `BOT_REPOSITORIES` (comma-separated names);
-   - secrets `BOT_PRIVATE_KEY`, `BOT_MEMORY_KEY` (any long random string, such as the output of `openssl rand -base64 32`), and `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY`;
+   - secrets `BOT_PRIVATE_KEY` and `BOT_MEMORY_KEY` (any long random string, such as the output of `openssl rand -base64 32`);
+   - Claude access, one of: Anthropic workload identity federation (no stored key: a rule trusting this repository's `main` branch, then the `BOT_ANTHROPIC_FEDERATION_RULE_ID`, `BOT_ANTHROPIC_ORGANIZATION_ID`, and optionally `BOT_ANTHROPIC_SERVICE_ACCOUNT_ID` and `BOT_ANTHROPIC_WORKSPACE_ID` variables), the `CLAUDE_CODE_OAUTH_TOKEN` secret (from `claude setup-token`, billed to the subscription; it takes precedence) or the `ANTHROPIC_API_KEY` secret;
    - for the security audit: the `ANTHROPIC_API_KEY` secret, which the auditor needs;
    - for production errors: the `BOT_BUGSINK_URL` variable (such as `https://example.bugsink.com`), the `BOT_BUGSINK_PROJECTS` variable mapping repositories to Bugsink project ids (`my-repository=1,other=2`) and the `BUGSINK_TOKEN` secret (a Bugsink API token with `issues:read`, `events:read` and `issues:comment`);
    - for slow pages: the `BOT_SITES` variable mapping repositories to sites (`my-repository=https://example.com`), and optionally `BOT_SLOW_TTFB_MS` (800) and `BOT_SLOW_TOTAL_MS` (1500);

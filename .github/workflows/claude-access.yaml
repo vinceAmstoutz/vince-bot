@@ -1,0 +1,37 @@
+name: Claude access check
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/claude-access.yaml]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  exchange:
+    name: Exchange the GitHub OIDC token for Claude credentials
+    if: github.event_name == 'push' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - name: Check the workload identity federation rule
+        env:
+          FEDERATION_RULE_ID: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          ORGANIZATION_ID: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          SERVICE_ACCOUNT_ID: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          WORKSPACE_ID: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
+        run: |
+          [ -n "$FEDERATION_RULE_ID" ] && [ -n "$ORGANIZATION_ID" ] || { echo '::error::set BOT_ANTHROPIC_FEDERATION_RULE_ID and BOT_ANTHROPIC_ORGANIZATION_ID'; exit 1; }
+          jwt=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value)
+          echo "::add-mask::$jwt"
+          response=$(jq -n --arg jwt "$jwt" --arg rule "$FEDERATION_RULE_ID" --arg org "$ORGANIZATION_ID" --arg account "$SERVICE_ACCOUNT_ID" --arg workspace "$WORKSPACE_ID" '
+              {grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: $jwt, federation_rule_id: $rule, organization_id: $org}
+              + (if $account != "" then {service_account_id: $account} else {} end)
+              + (if $workspace != "" then {workspace_id: $workspace} else {} end)' \
+            | curl -sS https://api.anthropic.com/v1/oauth/token -H 'content-type: application/json' --data @-)
+          printf '%s' "$response" | jq 'with_entries(if (.key | test("token$")) then .value = "<redacted>" else . end)'
+          printf '%s' "$response" | jq -e '.access_token' > /dev/null || { echo '::error::the token exchange was refused'; exit 1; }
+          echo 'Claude credentials obtained through workload identity federation.'
