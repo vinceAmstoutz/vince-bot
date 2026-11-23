@@ -54,6 +54,8 @@ jobs:
           cp memory/*.md "$RUNNER_TEMP/memory-before/" 2>/dev/null || true
 
       - name: Draft the sweep
+        id: draft
+        continue-on-error: true
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         env:
           GH_TOKEN: ${{ steps.read-token.outputs.token }}
@@ -61,6 +63,37 @@ jobs:
           github_token: ${{ steps.read-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Read prompts/sweep.md and follow it.
+            Extra instructions from the owner for this sweep only, which take precedence over the prompt file: ${{ inputs.focus || 'none' }}
+          display_report: false
+          show_full_output: false
+          claude_args: |
+            --max-turns 80
+            --allowedTools "Bash(gh api -X GET:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh release view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(date:*),Read(./**),Glob,Grep(./**),Write(./memory/**),Edit(./memory/**),Write(./out/**),Edit(./out/**)"
+            --disallowedTools "Read(./.git/**),Grep(./.git/**)"
+
+      - name: Decide whether to retry through federation
+        id: backup
+        if: steps.draft.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.draft.outputs.execution_file }}
+          FEDERATION_RULE_ID: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+        run: |
+          if [ -n "$FEDERATION_RULE_ID" ] && [ -s "$EXECUTION_FILE" ] && sh scripts/credential-failure.sh "$EXECUTION_FILE"; then
+            echo '::warning::the stored Claude credential was refused or exhausted; retrying through workload identity federation'
+            echo "retry=true" >> "$GITHUB_OUTPUT"
+          else
+            echo '::error::the sweep failed for another reason than its Claude credential'; exit 1
+          fi
+
+      - name: Draft the sweep through federation
+        if: steps.backup.outputs.retry == 'true'
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+        with:
+          github_token: ${{ steps.read-token.outputs.token }}
           anthropic_federation_rule_id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
           anthropic_organization_id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
           anthropic_service_account_id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}

@@ -95,8 +95,9 @@ runs:
       run: |
         if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset CLAUDE_CODE_OAUTH_TOKEN; fi
         if [ -z "$ANTHROPIC_API_KEY" ]; then unset ANTHROPIC_API_KEY; fi
-        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ] && [ -n "$FEDERATION_RULE_ID" ] && [ -n "$ORGANIZATION_ID" ]; then
-          [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || { echo '::error::workload identity federation needs the id-token: write permission'; exit 1; }
+        federation_configured() { [ -n "$FEDERATION_RULE_ID" ] && [ -n "$ORGANIZATION_ID" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; }
+        use_federation() {
+          unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
           federation=$(mktemp -d "$RUNNER_TEMP/federation-XXXXXX")
           chmod 700 "$federation"
           fetch_identity_token() {
@@ -117,15 +118,29 @@ runs:
           refresher=$!
           trap 'kill "$refresher" 2>/dev/null; rm -rf "$federation"' EXIT
           echo 'Authenticating to Claude through workload identity federation.'
+        }
+        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
+          federation_configured || { echo '::error::no Claude credential: set CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or the federation variables, with the id-token: write permission'; exit 1; }
+          use_federation
         fi
         set -- --max-turns "$MAX_TURNS" --permission-mode acceptEdits --output-format text \
           --allowedTools "Bash Read Write Edit MultiEdit Glob Grep WebFetch WebSearch Skill TodoWrite"
         if [ -n "$MODEL" ]; then set -- "$@" --model "$MODEL"; fi
         if [ -n "$EFFORT" ]; then set -- "$@" --effort "$EFFORT"; fi
         log="$RUNNER_TEMP/agent-$SKILL-$(date +%s).log"
-        if ! claude -p "Use the $SKILL skill to carry out your task. The task's context is in \$AGENT_CONTEXT ($AGENT_CONTEXT); write your outputs to \$AGENT_OUT ($AGENT_OUT)." "$@" > "$log" 2>&1; then
-          echo "::error::the agent stopped with an error (its output stays off the public log)"
-          exit 1
+        run_claude() {
+          claude -p "Use the $SKILL skill to carry out your task. The task's context is in \$AGENT_CONTEXT ($AGENT_CONTEXT); write your outputs to \$AGENT_OUT ($AGENT_OUT)." "$@" > "$log" 2>&1
+        }
+        if ! run_claude "$@"; then
+          if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ] && federation_configured \
+            && sh "$GITHUB_ACTION_PATH/../../../scripts/credential-failure.sh" "$log"; then
+            echo '::warning::the stored Claude credential was refused or exhausted; retrying through workload identity federation'
+            use_federation
+            run_claude "$@" || { echo "::error::the agent stopped with an error through federation too (its output stays off the public log)"; exit 1; }
+          else
+            echo "::error::the agent stopped with an error (its output stays off the public log)"
+            exit 1
+          fi
         fi
         echo "The agent finished; its output stays off the public log."
         test -s "$AGENT_OUT/$REQUIRED_OUTPUT" || { echo "::error::the agent did not write $REQUIRED_OUTPUT"; exit 1; }
