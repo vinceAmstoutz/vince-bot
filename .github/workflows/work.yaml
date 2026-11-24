@@ -272,19 +272,27 @@ jobs:
           footer=$(printf '\n\n---\n_Posted by vinceAmstoutz GitHub AI bot · [run](%s)_' "$RUN_URL")
           marker="<!-- vince-bot:$KIND:$REFERENCE -->"
           summary=$(cat "$OUT/summary.md")
+          reply() {
+            text=$(python3 -I -c 'import sys; t = " ".join(sys.argv[1].split()); print(t if len(t) <= 200 else t[:199] + "…")' "$1")
+            gh api "repos/$REPO/pulls/$NUMBER/comments/$REPLY_TO/replies" -f body="$text" --silent
+          }
           report() {
             if [ "$KIND" = error ] || [ "$KIND" = page ]; then
               gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$1
 
           $marker$footer" --silent
             elif [ -n "$REPLY_TO" ]; then
-              gh api "repos/$REPO/pulls/$NUMBER/comments/$REPLY_TO/replies" -f body="$1$footer" --silent
+              reply "$(head -n 1 "$OUT/reply.md" 2>/dev/null || printf '%s' "$1" | head -n 1)"
             else
               gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$1$footer" --silent
             fi
           }
           if [ "$(jq -r '.approved' "$OUT/verdict.json")" != true ]; then
             problems=$(jq -r '.problems[] | "- " + .' "$OUT/verdict.json")
+            if [ -n "$REPLY_TO" ]; then
+              reply "❓ Nothing pushed: $(jq -r '.problems[0] // "the check refused the change"' "$OUT/verdict.json")"
+              exit 0
+            fi
             report "@vinceAmstoutz I could not finish this, so nothing was committed.
 
           $problems
@@ -303,6 +311,14 @@ jobs:
           test -s "$OUT/commit-message.txt" || { echo '::error::changes without a commit message'; exit 1; }
           if [ "$KIND" = pull-request ]; then
             branch=$PR_BRANCH
+            if [ "$(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha)" != "$HEAD" ]; then
+              if [ -n "$REPLY_TO" ]; then
+                reply "⏭️ The branch moved while I worked, so I pushed nothing. Ask again if it is still needed."
+              else
+                report "The branch moved while I worked, so I pushed nothing. Ask again if it is still needed."
+              fi
+              exit 0
+            fi
           else
             branch="$SLUG/$KIND-${NUMBER#0}$(printf '%s' "$REFERENCE" | tr -c 'A-Za-z0-9' '-' | cut -c1-40)-$GITHUB_RUN_ID"
             gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$HEAD" > /dev/null
@@ -311,7 +327,10 @@ jobs:
             | gh api graphql --input - --jq '.data.createCommitOnBranch.commit | .oid + " " + .url')
           sh bot/scripts/assert-verified.sh "$REPO" "${created%% *}"
           commit=${created#* }
-          if [ "$KIND" = pull-request ]; then
+          if [ "$KIND" = pull-request ] && [ -n "$REPLY_TO" ]; then
+            done_line=$(head -n 1 "$OUT/reply.md" 2>/dev/null || echo '✅ Done.')
+            reply "$(python3 -I -c 'import sys; t = " ".join(sys.argv[1].split()); print(t if len(t) <= 188 else t[:187] + "…")' "$done_line") $(printf '%.7s' "${created%% *}")"
+          elif [ "$KIND" = pull-request ]; then
             report "$summary
 
           Pushed $commit"

@@ -9,7 +9,7 @@ Load the `working-in-a-repository` skill first. The owner's comment is in `$AGEN
 
 ## A reply in a code review thread
 
-When `$AGENT_CONTEXT/review-thread.json` exists, the owner wrote in a review thread on `path` around `line`: its `comments` hold the whole thread, often a finding of the bot's review and the owner's answer to it. Read the request in that light: "agree, fix that" means apply the fix the thread discusses (its `suggestion` block when there is one, checked against the code first); a question means answer it there. Your `summary.md` is posted as the reply in that thread: keep it to what you did or the answer, in a few lines.
+When `$AGENT_CONTEXT/review-thread.json` exists, the owner wrote in a review thread on `path` around `line`: its `comments` hold the whole thread, often a finding of the bot's review and the owner's answer to it. Read the request in that light: "agree, fix that" means apply the fix the thread discusses (its `suggestion` block when there is one, checked against the code first); a question means answer it there. Write the reply posted in that thread to `$AGENT_OUT/reply.md`: **one line of at most 200 characters**, starting with ✅ when you pushed the change (say what changed, nothing else; the workflow adds the commit), 💬 when you answer a question, ❓ when the owner must decide. The details go in `summary.md` and the commit message, which are not posted in the thread.
 
 ## Decide what is asked
 

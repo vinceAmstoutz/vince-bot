@@ -210,10 +210,8 @@ jobs:
             printf '%s' "$payload" | gh api "repos/$REPO/pulls/$NUMBER/reviews" --input - --silent
             echo "Posted a review with $(printf '%s' "$payload" | jq '.comments | length') inline comments."
             conclusion=neutral
-            posted=true
           else
             conclusion=success
-            posted=false
           fi
           resolved='[]'
           for thread in $(jq -r '.resolve // [] | .[]' "$OUT/review.json"); do
@@ -225,13 +223,6 @@ jobs:
             fi
           done
           echo "Resolved $(printf '%s' "$resolved" | jq length) fixed review threads."
-          unresolved=$(jq --argjson resolved "$resolved" '[.[] | select((.isResolved | not) and (.id as $id | $resolved | index($id) | not))] | length' "$CONTEXT/previous-threads.json")
-          gh api "repos/$REPO/pulls/$NUMBER/reviews" --paginate | jq -s add \
-            | jq -r --arg bot "$SLUG[bot]" --argjson posted "$posted" --argjson unresolved "$unresolved" -f bot/scripts/outdated-reviews.jq | jq -r '.[]' \
-            | while IFS= read -r review; do
-                gh api graphql -f id="$review" -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }' --silent \
-                  || echo '::warning::an earlier review could not be hidden'
-              done
           if [ -s "$OUT/pr-body.md" ] && [ "$(jq -r .approved "$OUT/verdict.json")" = true ]; then
             current=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.body // ""')
             if [ "$current" = "$(jq -r '.body // ""' "$CONTEXT/pull-request.json")" ]; then
