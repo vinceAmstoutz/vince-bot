@@ -72,7 +72,7 @@ jobs:
             while IFS= read -r row; do
               url=$(printf '%s' "$row" | jq -r .url)
               npx --yes lighthouse@13.6.0 "$url" --quiet --only-categories=performance --output=json --output-path="$RUNNER_TEMP/lighthouse.json" \
-                --chrome-flags='--headless=new --no-sandbox' > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/lighthouse.json"
+                --chrome-flags='--headless=new --no-sandbox' > /dev/null 2>&1 < /dev/null || echo '{}' > "$RUNNER_TEMP/lighthouse.json"
               audit=$(jq -c '{score: (.categories.performance.score // null), lcp_ms: (.audits["largest-contentful-paint"].numericValue // null), tbt_ms: (.audits["total-blocking-time"].numericValue // null), cls: (.audits["cumulative-layout-shift"].numericValue // null)}' "$RUNNER_TEMP/lighthouse.json" 2>/dev/null || echo '{}')
               measurement=$(printf '%s' "$results" | jq -c --arg url "$url" '.[] | select(.url == $url)')
               request=$(jq -rn --argjson m "$measurement" --argjson l "$audit" --arg ttfb "$SLOW_TTFB_MS" --arg total "$SLOW_TOTAL_MS" '
