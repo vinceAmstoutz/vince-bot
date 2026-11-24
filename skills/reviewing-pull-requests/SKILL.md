@@ -50,6 +50,7 @@ In a checkout, write:
   - `path` is relative to the repository root; `line` (and `start_line` for a range) are line numbers in the **new** version of the file, on lines the diff shows (added or context lines of `$AGENT_CONTEXT/files.json`'s patches). A finding elsewhere still gets a comment with its file and line: the workflow moves it into the review body.
   - When the fix replaces the commented lines, end the body with a ` ```suggestion ` block holding the **complete** replacement for exactly the lines from `start_line` (or `line`) to `line`, with the file's indentation, so the author can apply it in one click. Keep each suggestion to the lines it replaces; describe larger fixes in words.
   - One comment per finding. When there is nothing worth saying, write `{"summary": "No findings.", "comments": []}`.
+  - Read the bot's earlier threads on this pull request in `$AGENT_CONTEXT/previous-threads.json` first. List in `"resolve": ["<thread id>", ...]` every unresolved one whose finding the current diff fixes or makes irrelevant, or that the owner answered with a reason you accept: the workflow resolves them. Never repeat a finding a thread still holds open, and keep an unresolved one open while it applies. The workflow also hides the bot's earlier review summaries as outdated, so only the latest stays visible.
 
 - `$AGENT_OUT/summary.md`: one line per area you checked and the checks you ran with their results.
 

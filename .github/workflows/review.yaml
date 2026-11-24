@@ -115,11 +115,26 @@ jobs:
           GH_TOKEN: ${{ steps.read-token.outputs.token }}
           REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
           NUMBER: ${{ matrix.number }}
+          SLUG: ${{ steps.read-token.outputs.app-slug }}
         run: |
           { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/context" "$RUNNER_TEMP/out"
           gh pr view "$NUMBER" -R "$REPO" --json number,title,body,author,url,headRefName,headRefOid,baseRefName,files,commits > "$RUNNER_TEMP/context/pull-request.json"
           gh api "repos/$REPO/pulls/$NUMBER/files" --paginate | jq -s add > "$RUNNER_TEMP/context/files.json"
+          gh api graphql -F owner="${REPO%/*}" -F name="${REPO#*/}" -F number="$NUMBER" -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100) {
+                    nodes { id isResolved isOutdated path line originalLine comments(first: 20) { nodes { author { login } body } } }
+                  }
+                }
+              }
+            }' \
+            | jq --arg bot "$SLUG" '[.data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.comments.nodes[0].author.login as $author | $author == $bot or $author == ($bot + "[bot]"))
+                | {id, isResolved, isOutdated, path, line: (.line // .originalLine), finding: .comments.nodes[0].body,
+                   replies: [.comments.nodes[1:][] | {author: .author.login, body}]}]' > "$RUNNER_TEMP/context/previous-threads.json"
           printf 'Review this pull request.\n' > "$RUNNER_TEMP/context/request.md"
 
       - name: Checkout the pull request
@@ -187,6 +202,7 @@ jobs:
           REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
           NUMBER: ${{ matrix.number }}
           HEAD: ${{ matrix.head }}
+          SLUG: ${{ steps.write-token.outputs.app-slug }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           payload=$(python3 -I bot/scripts/review-payload.py "$OUT/review.json" "$CONTEXT/files.json" "$HEAD" "_Reviewed by vinceAmstoutz GitHub AI bot · [run]($RUN_URL)_")
@@ -194,9 +210,28 @@ jobs:
             printf '%s' "$payload" | gh api "repos/$REPO/pulls/$NUMBER/reviews" --input - --silent
             echo "Posted a review with $(printf '%s' "$payload" | jq '.comments | length') inline comments."
             conclusion=neutral
+            posted=true
           else
             conclusion=success
+            posted=false
           fi
+          resolved='[]'
+          for thread in $(jq -r '.resolve // [] | .[]' "$OUT/review.json"); do
+            jq -e --arg id "$thread" 'any(.[]; .id == $id and (.isResolved | not))' "$CONTEXT/previous-threads.json" > /dev/null || continue
+            if gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent; then
+              resolved=$(printf '%s' "$resolved" | jq -c --arg id "$thread" '. + [$id]')
+            else
+              echo '::warning::a fixed review thread could not be resolved'
+            fi
+          done
+          echo "Resolved $(printf '%s' "$resolved" | jq length) fixed review threads."
+          unresolved=$(jq --argjson resolved "$resolved" '[.[] | select((.isResolved | not) and (.id as $id | $resolved | index($id) | not))] | length' "$CONTEXT/previous-threads.json")
+          gh api "repos/$REPO/pulls/$NUMBER/reviews" --paginate | jq -s add \
+            | jq -r --arg bot "$SLUG[bot]" --argjson posted "$posted" --argjson unresolved "$unresolved" -f bot/scripts/outdated-reviews.jq | jq -r '.[]' \
+            | while IFS= read -r review; do
+                gh api graphql -f id="$review" -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }' --silent \
+                  || echo '::warning::an earlier review could not be hidden'
+              done
           if [ -s "$OUT/pr-body.md" ] && [ "$(jq -r .approved "$OUT/verdict.json")" = true ]; then
             current=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.body // ""')
             if [ "$current" = "$(jq -r '.body // ""' "$CONTEXT/pull-request.json")" ]; then
