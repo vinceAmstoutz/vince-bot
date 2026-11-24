@@ -26,12 +26,41 @@ Keep findings you verified by reading the surrounding code. For each: the file a
 
 In a checkout, write:
 
-- `$AGENT_OUT/review.md`: the findings as a Markdown list, or the single line `No findings.` when there is nothing worth saying;
+- `$AGENT_OUT/review.json`: the review, posted as a GitHub review whose findings sit on the lines they are about:
+
+  ````json
+  {
+    "summary": "One or two plain sentences, no Markdown: the overall verdict and the most important finding.",
+    "comments": [
+      {
+        "path": "config/talks.yaml",
+        "line": 12,
+        "body": "What goes wrong, in one sentence.\n\n```suggestion\n    city: Amsterdam\n```"
+      },
+      {
+        "path": "src/Talks.php",
+        "start_line": 40,
+        "line": 43,
+        "body": "What goes wrong over these lines, and the fix."
+      }
+    ]
+  }
+  ````
+
+  - `path` is relative to the repository root; `line` (and `start_line` for a range) are line numbers in the **new** version of the file, on lines the diff shows (added or context lines of `$AGENT_CONTEXT/files.json`'s patches). A finding elsewhere still gets a comment with its file and line: the workflow moves it into the review body.
+  - When the fix replaces the commented lines, end the body with a ` ```suggestion ` block holding the **complete** replacement for exactly the lines from `start_line` (or `line`) to `line`, with the file's indentation, so the author can apply it in one click. Keep each suggestion to the lines it replaces; describe larger fixes in words.
+  - One comment per finding. When there is nothing worth saying, write `{"summary": "No findings.", "comments": []}`.
+
 - `$AGENT_OUT/summary.md`: one line per area you checked and the checks you ran with their results.
 
-## Keep the description accurate (owner's pull requests, in a checkout)
+## Keep the description accurate (in a checkout)
 
-Compare the pull request's description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the diff. When its summary is missing, empty, a leftover template, or no longer matches what the diff does, write the whole new description to `$AGENT_OUT/pr-body.md`: the current description with its summary replaced by the block described in [description-format.md](description-format.md). Keep everything else the author wrote (checklists, issue links, notes) exactly as it is. When the summary is accurate, or the block is already there and still right, write nothing.
+On every review, whoever opened the pull request (the owner or the bot), compare its description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit. Rewrite it when:
+
+- the summary is missing, empty or a leftover template;
+- a change in the diff is not described, or the description announces something the diff does not do (a pull request that grew with new commits needs its description to grow too).
+
+Then write the whole new description to `$AGENT_OUT/pr-body.md`: the current description with its summary replaced by the block described in [description-format.md](description-format.md), between its markers (when the markers are already there, replace only what lies between them). Keep everything else the author wrote (checklists, issue links, notes) exactly as it is. When the description already covers the whole diff, write nothing.
 
 ## Sweep reviews
 

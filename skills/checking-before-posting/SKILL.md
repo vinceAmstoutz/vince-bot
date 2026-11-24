@@ -22,8 +22,9 @@ Skip this part when `$AGENT_CONTEXT/rules/` exists: you are then in the bot's ow
 
 ## Check the prose
 
-For `commit-message.txt`, `pull-request.json`, `pr-body.md`, `review.md`, `summary.md`, `posts.json` and `issues.json`, whichever exist:
+For `commit-message.txt`, `pull-request.json`, `pr-body.md`, `review.json`, `summary.md`, `posts.json` and `issues.json`, whichever exist:
 
+- **Review** (`review.json`): each comment's `path` and `line` point at the lines it discusses in the new version of the file; a ` ```suggestion ` block replaces exactly the lines from `start_line` (or `line`) to `line`, keeps the file's indentation, and applies cleanly (no lines outside that range, nothing left out); drop a comment you cannot verify.
 - **Pull request description** (`pr-body.md`): it must pass the repository's own pull request check when there is one (for example `PR_TITLE=… PR_BODY="$(cat pr-body.md)" BASE_REF=… sh .github/scripts/check-pull-request.sh`), keep every section and line the author wrote outside the bot's block, and follow the bot's description format inside it. When it cannot pass, delete `pr-body.md`.
 - **Format**: follow the repository's conventions exactly: Conventional Commits types and scopes it lists, title length limits, required pull request sections and only those, its changelog line format, its Markdown style (line wrapping, headings). When the repository ships a check for it (a commitlint config, a pull request check script, a changelog check, Prettier or markdownlint), run it on the text and fix until it passes.
 - **Personal data**: nothing from a production event (request data, headers, cookies, user ids, emails, local variables) appears in code, tests, commit messages, pull requests, comments or issues; describe failing inputs in general terms.
