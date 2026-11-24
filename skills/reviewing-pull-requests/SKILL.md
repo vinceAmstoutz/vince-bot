@@ -59,9 +59,10 @@ In a checkout, write:
 Every pull request of the owner or of the bot carries the bot's description block (see [description-format.md](description-format.md)), between its markers, as its summary. On every review, compare the description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit, and write the whole new description to `$AGENT_OUT/pr-body.md` when:
 
 - the block is missing: build it from the diff and from what the author's summary says, keeping its facts (versions, advisories, issue numbers, migration notes) in the block's lines;
-- the block no longer covers the whole diff, or announces something the diff does not do (a pull request that grew with new commits needs its description to grow too): replace only what lies between the markers.
+- the block no longer covers the whole diff, or announces something the diff does not do (a pull request that grew with new commits needs its description to grow too): rewrite what lies between the markers;
+- the author's description repeats what the block says: remove the repeated parts.
 
-The block replaces the author's summary (the opening paragraphs, or the summary section of the repository's template); keep everything else the author wrote (other sections, checklists, issue links such as `Closes #12`, notes) exactly as it is, below or around the block as the template requires. When the block is there and covers the whole diff, write nothing.
+The block **replaces whatever the author wrote that it covers**: a summary, explanations or details saying the same thing go, and so does anything the diff already shows (lists of changed files, descriptions of what the code does or how it is built). Keep, exactly as written, only what the author added that the block does not cover **and** that a reader needs but cannot get from the diff (for example a "before merging" action, a migration note, the reason for a choice, a screenshot), plus issue links such as `Closes #12` and the sections, checkboxes and lines the repository's own pull request rules require, with the block in the section meant for the summary. When the block is there, covers the whole diff and nothing outside it repeats it, write nothing.
 
 ## Sweep reviews
 
