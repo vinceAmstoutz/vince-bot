@@ -40,4 +40,7 @@ python3 -I "$root/scripts/review-payload.py" "$work/review.json" "$work/files.js
 printf '{"summary": "No findings.", "comments": []}' > "$work/empty.json"
 [ -z "$(python3 -I "$root/scripts/review-payload.py" "$work/empty.json" "$work/files.json" abc123 'FOOTER')" ] || fail 'no review without findings'
 
+printf '{"summary": "No findings. The route list is correct and fully tested.", "comments": []}' > "$work/praise.json"
+[ -z "$(python3 -I "$root/scripts/review-payload.py" "$work/praise.json" "$work/files.json" abc123 'FOOTER')" ] || fail 'no review for a summary without comments'
+
 echo 'review_payload_test: ok'

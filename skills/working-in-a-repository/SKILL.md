@@ -43,6 +43,6 @@ Write your outputs in `$AGENT_OUT`, never inside the repository:
 
 - `summary.md` (always): what you did and why, what you ran and its result, and anything the owner must decide. Markdown, short, no greeting. Mention `@vinceAmstoutz` only when they must act.
 - `commit-message.txt` (when you changed files): one commit message in the repository's convention (Conventional Commits unless it says otherwise), a subject line, a blank line, a short body. No co-author trailer, no mention of any AI tool.
-- `pull-request.json` (when told to open a pull request): `{"title": "...", "body": "..."}` following the repository's pull request template and rules.
+- `pull-request.json` (when told to open a pull request): `{"title": "...", "body": "..."}` following the repository's pull request template and rules. The summary of the body is the bot's description block, markers included, as `~/.claude/skills/reviewing-pull-requests/description-format.md` describes it; when the repository imposes a template, the block goes in its summary section, within its limits.
 
 Leave the changes in the working tree uncommitted; never run `git commit`, `git push` or anything that rewrites history. Every commit in the owner's repositories must be signed: the workflow creates the only commit through GitHub's API, which signs it, and refuses to publish one GitHub does not show as Verified.

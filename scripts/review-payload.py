@@ -2,7 +2,7 @@
 
 Prints the GitHub review payload for the agent's review: comments on lines of
 the diff become inline comments, the others join the review body. Prints
-nothing when the review holds no finding.
+nothing when the review holds no comment.
 """
 import json
 import re
@@ -49,9 +49,10 @@ def main(review_path, files_path, head, footer):
             place = f"`{path}` line {start}-{line}" if start else f"`{path}` line {line}"
             outside.append(f"- {place}: {comment['body']}")
 
-    summary = review.get("summary", "").strip()
-    if not inline and not outside and summary.rstrip(".").lower() in ("", "no findings"):
+    if not inline and not outside:
         return
+
+    summary = review.get("summary", "").strip()
 
     body = summary
     if outside:
