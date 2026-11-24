@@ -16,4 +16,9 @@ selected=$(printf '%s' "$comments" | jq -c --arg owner owner --arg bot my-bot -f
 [ "$(printf '%s' "$selected" | jq -c '.[1] | {number, is_pr}')" = '{"number":6,"is_pr":true}' ] || fail 'pull request'
 [ "$(printf '%s' "$selected" | jq -c '.[0] | {number, is_pr, body}')" = '{"number":4,"is_pr":false,"body":"@My-Bot fix the typo"}' ] || fail 'issue'
 
+review='[{"id":20,"user":{"login":"owner"},"body":"/bot i agree, fix that","html_url":"https://github.com/o/r/pull/10#discussion_r20","pull_request_url":"https://api.github.com/repos/o/r/pulls/10","pull_request_review_id":5,"in_reply_to_id":19},{"id":21,"user":{"login":"owner"},"body":"/bot why?","html_url":"https://github.com/o/r/pull/10#discussion_r21","pull_request_url":"https://api.github.com/repos/o/r/pulls/10","pull_request_review_id":6}]'
+reviewed=$(printf '%s' "$review" | jq -c --arg owner owner --arg bot my-bot -f "$root/scripts/select-mentions.jq")
+[ "$(printf '%s' "$reviewed" | jq -c '[.[] | {comment_id, number, is_pr, type, reply_to}]')" = '[{"comment_id":20,"number":10,"is_pr":true,"type":"review","reply_to":19},{"comment_id":21,"number":10,"is_pr":true,"type":"review","reply_to":21}]' ] || fail "review comments $(printf '%s' "$reviewed" | jq -c '[.[] | {comment_id, number, is_pr, type, reply_to}]')"
+[ "$(printf '%s' "$selected" | jq -c '.[0] | {type, reply_to}')" = '{"type":"issue","reply_to":null}' ] || fail 'issue comments keep no thread'
+
 echo 'select_mentions_test: ok'

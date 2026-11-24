@@ -3,6 +3,10 @@ name: Bot mentions
 on:
   schedule:
     - cron: "*/30 * * * *"
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       repository:
@@ -13,17 +17,27 @@ on:
         description: Id of that comment
         required: false
         type: string
+      comment_type:
+        description: issue for a conversation comment, review for a comment in a code review thread
+        required: false
+        type: string
+        default: issue
 
 permissions: {}
 
 concurrency:
-  group: mentions-${{ inputs.comment_id || 'scan' }}
+  group: mentions-${{ inputs.comment_id || github.event.comment.id || 'scan' }}
   cancel-in-progress: false
 
 jobs:
   select:
     name: Find the owner's mentions of the bot
-    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    if: >-
+      github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner)
+      || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment')
+          && github.event.comment.user.login == github.repository_owner
+          && (contains(github.event.comment.body, '/bot') || contains(github.event.comment.body, '@vinceamstoutz-github-ai-bot')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,7 +56,7 @@ jobs:
           client-id: ${{ vars.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ vars.BOT_REPOSITORIES }}
+          repositories: ${{ inputs.repository || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && github.event.repository.name) || vars.BOT_REPOSITORIES }}
           permission-issues: write
           permission-pull-requests: write
 
@@ -53,34 +67,40 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           SLUG: ${{ steps.token.outputs.app-slug }}
           REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
-          ONLY_REPOSITORY: ${{ inputs.repository }}
-          ONLY_COMMENT: ${{ inputs.comment_id }}
+          ONLY_REPOSITORY: ${{ inputs.repository || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && github.event.repository.name) || '' }}
+          ONLY_COMMENT: ${{ inputs.comment_id || github.event.comment.id || '' }}
+          COMMENT_TYPE: ${{ inputs.comment_type || (github.event_name == 'pull_request_review_comment' && 'review') || 'issue' }}
+          OWN_REPOSITORY: ${{ github.event.repository.name }}
         run: |
           since=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
           selected='[]'
           if [ -n "$ONLY_COMMENT" ]; then
             case "$ONLY_COMMENT" in *[!0-9]*) echo '::error::comment_id must be numeric'; exit 1;; esac
-            case ",$REPOSITORIES," in *",$ONLY_REPOSITORY,"*) ;; *) echo '::error::repository is not in BOT_REPOSITORIES'; exit 1;; esac
+            case ",$REPOSITORIES,$OWN_REPOSITORY," in *",$ONLY_REPOSITORY,"*) ;; *) echo '::error::repository is not in BOT_REPOSITORIES'; exit 1;; esac
+            case "$COMMENT_TYPE" in issue|review) ;; *) echo '::error::comment_type must be issue or review'; exit 1;; esac
             REPOSITORIES=$ONLY_REPOSITORY
           fi
           for repo in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
-            if [ -n "$ONLY_COMMENT" ]; then
+            if [ -n "$ONLY_COMMENT" ] && [ "$COMMENT_TYPE" = review ]; then
+              comments=$(gh api "repos/$OWNER/$repo/pulls/comments/$ONLY_COMMENT" | jq -c '[.]')
+            elif [ -n "$ONLY_COMMENT" ]; then
               comments=$(gh api "repos/$OWNER/$repo/issues/comments/$ONLY_COMMENT" | jq -c '[.]')
             else
-              comments=$(gh api "repos/$OWNER/$repo/issues/comments?since=$since&per_page=100" --paginate | jq -s add)
+              comments=$( { gh api "repos/$OWNER/$repo/issues/comments?since=$since&per_page=100" --paginate; gh api "repos/$OWNER/$repo/pulls/comments?since=$since&per_page=100" --paginate; } | jq -s add)
             fi
             mentions=$(printf '%s' "$comments" | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f scripts/select-mentions.jq)
-            for row in $(printf '%s' "$mentions" | jq -c '.[] | {comment_id, number, is_pr}'); do
+            while IFS= read -r row; do
               id=$(printf '%s' "$row" | jq -r .comment_id)
-              claimed=$(gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" | jq --arg bot "$SLUG[bot]" '[.[] | select(.user.login == $bot)] | length')
+              if [ "$(printf '%s' "$row" | jq -r .type)" = review ]; then reactions="repos/$OWNER/$repo/pulls/comments/$id/reactions"; else reactions="repos/$OWNER/$repo/issues/comments/$id/reactions"; fi
+              claimed=$(gh api "$reactions" | jq --arg bot "$SLUG[bot]" '[.[] | select(.user.login == $bot)] | length')
               if [ "$claimed" = 0 ]; then
-                gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" -f content=+1 --silent
-                gh api "repos/$OWNER/$repo/issues/comments/$id/reactions" -f content=eyes --silent
+                gh api "$reactions" -f content=+1 --silent
+                gh api "$reactions" -f content=eyes --silent
                 body=$(printf '%s' "$mentions" | jq -r --argjson id "$id" '.[] | select(.comment_id == $id) | .body')
                 selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson row "$row" --arg body "$body" \
-                  '. + [{repository: $repo, number: $row.number, kind: (if $row.is_pr then "pull-request" else "issue" end), request: $body}]')
+                  '. + [{repository: $repo, number: $row.number, kind: (if $row.is_pr then "pull-request" else "issue" end), request: $body, reply_to: (($row.reply_to // "") | tostring)}]')
               fi
-            done
+            done < <(printf '%s' "$mentions" | jq -c '.[] | {comment_id, number, is_pr, type, reply_to}')
           done
           echo "matrix=$(printf '%s' "$selected" | jq -c '.[:5]')" >> "$GITHUB_OUTPUT"
 
@@ -102,6 +122,7 @@ jobs:
       number: ${{ matrix.number }}
       kind: ${{ matrix.kind }}
       request: ${{ matrix.request }}
+      reply-to: ${{ matrix.reply_to }}
     secrets:
       BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

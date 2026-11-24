@@ -54,14 +54,14 @@ In a checkout, write:
 
 - `$AGENT_OUT/summary.md`: one line per area you checked and the checks you ran with their results.
 
-## Keep the description accurate (in a checkout)
+## Give the description the owner's format (in a checkout)
 
-On every review, whoever opened the pull request (the owner or the bot), compare its description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit. Rewrite it when:
+Every pull request of the owner or of the bot carries the bot's description block (see [description-format.md](description-format.md)), between its markers, as its summary. On every review, compare the description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit, and write the whole new description to `$AGENT_OUT/pr-body.md` when:
 
-- the summary is missing, empty or a leftover template;
-- a change in the diff is not described, or the description announces something the diff does not do (a pull request that grew with new commits needs its description to grow too).
+- the block is missing: build it from the diff and from what the author's summary says, keeping its facts (versions, advisories, issue numbers, migration notes) in the block's lines;
+- the block no longer covers the whole diff, or announces something the diff does not do (a pull request that grew with new commits needs its description to grow too): replace only what lies between the markers.
 
-Then write the whole new description to `$AGENT_OUT/pr-body.md`: the current description with its summary replaced by the block described in [description-format.md](description-format.md), between its markers (when the markers are already there, replace only what lies between them). Keep everything else the author wrote (checklists, issue links, notes) exactly as it is. When the description already covers the whole diff, write nothing.
+The block replaces the author's summary (the opening paragraphs, or the summary section of the repository's template); keep everything else the author wrote (other sections, checklists, issue links such as `Closes #12`, notes) exactly as it is, below or around the block as the template requires. When the block is there and covers the whole diff, write nothing.
 
 ## Sweep reviews
 

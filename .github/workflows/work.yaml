@@ -21,6 +21,10 @@ on:
         type: string
         required: false
         default: ""
+      reply-to:
+        type: string
+        required: false
+        default: ""
     secrets:
       BOT_PRIVATE_KEY:
         required: true
@@ -60,6 +64,10 @@ on:
         description: The Bugsink issue id (error) or the page path (page)
         type: string
         required: false
+      reply-to:
+        description: The first comment of the code review thread to answer in (pull-request only)
+        type: string
+        required: false
 
 permissions: {}
 
@@ -89,8 +97,11 @@ jobs:
           NUMBER: ${{ inputs.number }}
           REFERENCE: ${{ inputs.reference }}
           ALLOWED: ${{ vars.BOT_REPOSITORIES }}
+          OWN_REPOSITORY: ${{ github.event.repository.name }}
+          REPLY_TO: ${{ inputs.reply-to }}
         run: |
-          case ",$ALLOWED," in *",$REPOSITORY,"*) ;; *) echo "::error::$REPOSITORY is not in BOT_REPOSITORIES"; exit 1;; esac
+          case "$REPLY_TO" in *[!0-9]*) echo '::error::reply-to must be a comment id'; exit 1;; esac
+          case ",$ALLOWED,$OWN_REPOSITORY," in *",$REPOSITORY,"*) ;; *) echo "::error::$REPOSITORY is not in BOT_REPOSITORIES"; exit 1;; esac
           case "$KIND" in pull-request|issue) ;; error|page) ;; *) echo "::error::unknown kind $KIND"; exit 1;; esac
           case "$KIND" in
             error) case "$REFERENCE" in ''|*[!0-9a-f-]*) echo '::error::reference must be a Bugsink issue id'; exit 1;; esac ;;
@@ -123,6 +134,7 @@ jobs:
           KIND: ${{ inputs.kind }}
           REQUEST: ${{ inputs.request }}
           REFERENCE: ${{ inputs.reference }}
+          REPLY_TO: ${{ inputs.reply-to }}
           BUGSINK_URL: ${{ vars.BOT_BUGSINK_URL }}
           BUGSINK_TOKEN: ${{ secrets.BUGSINK_TOKEN }}
         run: |
@@ -131,6 +143,12 @@ jobs:
           if [ "$KIND" = pull-request ] || [ "$KIND" = issue ]; then
             jq -n --argjson issue "$(gh api "repos/$REPO/issues/$NUMBER")" --argjson comments "$(gh api "repos/$REPO/issues/$NUMBER/comments" --paginate | jq -s add)" \
               '{issue: $issue, comments: $comments}' > "$CONTEXT/thread.json"
+          fi
+          if [ -n "$REPLY_TO" ]; then
+            gh api "repos/$REPO/pulls/$NUMBER/comments" --paginate | jq -s add \
+              | jq --argjson root "$REPLY_TO" '[.[] | select(.id == $root or .in_reply_to_id == $root)] | sort_by(.created_at)
+                  | {path: .[0].path, line: (.[0].line // .[0].original_line), start_line: .[0].start_line, diff_hunk: .[0].diff_hunk,
+                     comments: [.[] | {author: .user.login, body, created_at}]}' > "$CONTEXT/review-thread.json"
           fi
           if [ "$KIND" = error ]; then
             bugsink() { curl -fsS --max-time 30 -H "Authorization: Bearer $BUGSINK_TOKEN" "$BUGSINK_URL/api/canonical/0/$1"; }
@@ -246,6 +264,7 @@ jobs:
           SLUG: ${{ steps.write-token.outputs.app-slug }}
           REFERENCE: ${{ inputs.reference }}
           TITLE: ${{ steps.context.outputs.title }}
+          REPLY_TO: ${{ inputs.reply-to }}
           BUGSINK_URL: ${{ vars.BOT_BUGSINK_URL }}
           BUGSINK_TOKEN: ${{ secrets.BUGSINK_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -258,6 +277,8 @@ jobs:
               gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$1
 
           $marker$footer" --silent
+            elif [ -n "$REPLY_TO" ]; then
+              gh api "repos/$REPO/pulls/$NUMBER/comments/$REPLY_TO/replies" -f body="$1$footer" --silent
             else
               gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$1$footer" --silent
             fi
@@ -291,9 +312,9 @@ jobs:
           sh bot/scripts/assert-verified.sh "$REPO" "${created%% *}"
           commit=${created#* }
           if [ "$KIND" = pull-request ]; then
-            gh api "repos/$REPO/issues/$NUMBER/comments" -f body="$summary
+            report "$summary
 
-          Pushed $commit$footer" --silent
+          Pushed $commit"
           elif [ "$KIND" = issue ]; then
             test -s "$OUT/pull-request.json" || { echo '::error::no pull-request.json for the issue'; exit 1; }
             pr=$(gh api "repos/$REPO/pulls" -f head="$branch" -f base="$BASE" \
