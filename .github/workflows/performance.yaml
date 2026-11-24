@@ -69,7 +69,7 @@ jobs:
             echo "Timed $(printf '%s' "$results" | jq length) pages."
             slow=$(printf '%s' "$results" | jq -c --argjson ttfb "$SLOW_TTFB_MS" --argjson total "$SLOW_TOTAL_MS" --argjson open "$open" \
               '[.[] | select((.ttfb_ms > $ttfb or .total_ms > $total) and (.path as $p | $open | index($p) | not))] | sort_by(-.total_ms) | .[:2]')
-            for row in $(printf '%s' "$slow" | jq -c '.[] | {url, path}'); do
+            while IFS= read -r row; do
               url=$(printf '%s' "$row" | jq -r .url)
               npx --yes lighthouse@13.6.0 "$url" --quiet --only-categories=performance --output=json --output-path="$RUNNER_TEMP/lighthouse.json" \
                 --chrome-flags='--headless=new --no-sandbox' > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/lighthouse.json"
@@ -81,7 +81,7 @@ jobs:
                 + "- Size: \($m.bytes) bytes, HTTP \($m.status)\n- Lighthouse performance score: \($l.score // "n/a"), LCP \($l.lcp_ms // "n/a") ms, TBT \($l.tbt_ms // "n/a") ms, CLS \($l.cls // "n/a")"')
               path=$(printf '%s' "$row" | jq -r .path)
               selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --arg path "$path" --arg request "$request" '. + [{repository: $repo, reference: $path, request: $request}]')
-            done
+            done < <(printf '%s' "$slow" | jq -c '.[] | {url, path}')
           done
           echo "Found $(printf '%s' "$selected" | jq length) slow pages to work on."
           echo "matrix=$(printf '%s' "$selected" | jq -c '.[:2]')" >> "$GITHUB_OUTPUT"

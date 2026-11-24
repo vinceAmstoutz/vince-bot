@@ -68,13 +68,13 @@ jobs:
             prs=$(gh pr list -R "$OWNER/$repo" --state open --limit 50 --json number,headRefOid,isDraft,isCrossRepository,author \
               | jq -c --arg owner "$OWNER" --arg bot "app/$SLUG" '[.[] | select((.isDraft or .isCrossRepository) | not) | select(.author.login == $owner or .author.login == $bot)]')
             if [ -n "$ONLY_NUMBER" ]; then prs=$(printf '%s' "$prs" | jq -c --argjson n "$ONLY_NUMBER" '[.[] | select(.number == $n)]'); fi
-            for row in $(printf '%s' "$prs" | jq -c '.[]'); do
+            while IFS= read -r row; do
               sha=$(printf '%s' "$row" | jq -r .headRefOid)
               done=$(gh api "repos/$OWNER/$repo/commits/$sha/check-runs?check_name=Bot%20review" --jq .total_count)
               if [ "$done" = 0 ]; then
                 selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson row "$row" '. + [{repository: $repo, number: $row.number, head: $row.headRefOid}]')
               fi
-            done
+            done < <(printf '%s' "$prs" | jq -c '.[] | {number, headRefOid}')
           done
           echo "matrix=$(printf '%s' "$selected" | jq -c '.[:6]')" >> "$GITHUB_OUTPUT"
 

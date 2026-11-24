@@ -7,6 +7,10 @@ description: Carry out what the owner asked when they mention the bot in an issu
 
 Load the `working-in-a-repository` skill first. The owner's comment is in `$AGENT_CONTEXT/request.md`; the issue or pull request and its whole conversation are in `$AGENT_CONTEXT/thread.json`, and `$AGENT_CONTEXT/pull-request.json` exists when the comment is on a pull request.
 
+## A reply in a code review thread
+
+When `$AGENT_CONTEXT/review-thread.json` exists, the owner wrote in a review thread on `path` around `line`: its `comments` hold the whole thread, often a finding of the bot's review and the owner's answer to it. Read the request in that light: "agree, fix that" means apply the fix the thread discusses (its `suggestion` block when there is one, checked against the code first); a question means answer it there. Your `summary.md` is posted as the reply in that thread: keep it to what you did or the answer, in a few lines.
+
 ## Decide what is asked
 
 - **A change** ("fix", "implement", "handle", "update", "rebase onto the review", …): make it.
