@@ -1,0 +1,143 @@
+name: Bot tool updates
+
+on:
+  schedule:
+    - cron: "41 5 * * 3"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  repositories:
+    name: List the repositories
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Split BOT_REPOSITORIES
+        id: list
+        env:
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+        run: echo "matrix=$(printf '%s' "$REPOSITORIES" | jq -Rc 'split(",") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+
+  update:
+    name: Update the tools of ${{ matrix.repository }}
+    needs: repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        repository: ${{ fromJSON(needs.repositories.outputs.matrix) }}
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Create the read token
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Pick the base branch
+        id: base
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+          SLUG: ${{ steps.read-token.outputs.app-slug }}
+        run: |
+          if gh pr list -R "$REPO" --state open --limit 200 --json headRefName --jq '.[].headRefName' | grep -q "^$SLUG/tools-"; then
+            echo '::notice::a tool update pull request is already open'
+            exit 0
+          fi
+          release=$(gh api "repos/$REPO/branches?per_page=100" --paginate --jq '.[].name' | grep -E '^[0-9]+\.x$' | sort -V | head -n 1 || true)
+          base=${release:-$(gh api "repos/$REPO" --jq .default_branch)}
+          { echo "base=$base"
+            echo "head=$(gh api "repos/$REPO/commits/$base" --jq .sha)"; } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the repository
+        if: steps.base.outputs.head != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.repository }}
+          ref: ${{ steps.base.outputs.head }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: target
+          persist-credentials: false
+
+      - name: Set up PHP
+        if: steps.base.outputs.head != ''
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.5"
+          coverage: none
+          tools: none
+
+      - name: Update the tools
+        id: update
+        if: steps.base.outputs.head != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          changes="$RUNNER_TEMP/changes"
+          : > "$changes"
+          sh bot/scripts/update-tools.sh target "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" "$changes"
+          if [ ! -s "$changes" ]; then
+            echo '::notice::the tools are up to date'
+            exit 0
+          fi
+          sh bot/scripts/tools-pull-request.sh "$changes" "$BASE" target/.github/PULL_REQUEST_TEMPLATE.md > "$RUNNER_TEMP/pull-request.json"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check the pull request text against the repository's own check
+        if: steps.update.outputs.changed == 'true' && hashFiles('target/.github/scripts/check-pull-request.sh') != ''
+        env:
+          BASE_REF: ${{ steps.base.outputs.base }}
+        run: |
+          PR_TITLE=$(jq -r .title "$RUNNER_TEMP/pull-request.json") \
+          PR_BODY=$(jq -r .body "$RUNNER_TEMP/pull-request.json") \
+            sh target/.github/scripts/check-pull-request.sh
+
+      - name: Create the write token
+        id: write-token
+        if: steps.update.outputs.changed == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Commit and open the pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
+          SLUG: ${{ steps.write-token.outputs.app-slug }}
+          BASE: ${{ steps.base.outputs.base }}
+          HEAD: ${{ steps.base.outputs.head }}
+        run: |
+          branch="$SLUG/tools-$GITHUB_RUN_ID"
+          title=$(jq -r .title "$RUNNER_TEMP/pull-request.json")
+          commit=$(sh bot/scripts/git-data-commit.sh target "$REPO" "$branch" "$HEAD" "$title" $(git -C target diff --name-only))
+          if ! sh bot/scripts/assert-verified.sh "$REPO" "$commit"; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" --silent
+            exit 1
+          fi
+          gh api "repos/$REPO/pulls" -f head="$branch" -f base="$BASE" -f title="$title" \
+            -f body="$(jq -r .body "$RUNNER_TEMP/pull-request.json")" --silent
