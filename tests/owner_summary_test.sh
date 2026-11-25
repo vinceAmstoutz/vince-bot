@@ -71,6 +71,10 @@ grep -q BOT_REPORTS_REPOSITORY "$work/error" || fail 'the error does not name th
 for workflow in weekly security-audit; do
   grep -q 'scripts/owner-summary.sh seal "\$OUT/summary.md"' "$root/.github/workflows/$workflow.yaml" || fail "$workflow.yaml discards summary.md"
   grep -q 'scripts/owner-summary.sh post "\$OUT/summary.md"' "$root/.github/workflows/$workflow.yaml" || fail "$workflow.yaml does not tell the owner"
+  # A summary that cannot be sealed or uploaded must not keep the verified issues from being opened.
+  grep -n -E 'name: Open the issues|owner-summary.sh seal' "$root/.github/workflows/$workflow.yaml" | head -n 1 | grep -q 'Open the issues' || fail "$workflow.yaml seals the summary before it opens the issues"
+  # And issues that cannot be opened must not keep the checked summary from the owner.
+  grep -B 5 'owner-summary.sh seal' "$root/.github/workflows/$workflow.yaml" | grep -qF "if: \${{ !cancelled() && steps.check.outcome == 'success' }}" || fail "$workflow.yaml drops the summary when the issues cannot be opened"
 done
 grep -h -A 6 'uses: actions/upload-artifact@' "$root"/.github/workflows/*.yaml | grep -E '^ +path:' > "$work/paths" || fail 'no workflow uploads the sealed summary'
 ! grep -v '\.enc$' "$work/paths" || fail 'a workflow uploads a file that is not encrypted'
