@@ -15,6 +15,11 @@ on:
         description: Number of that pull request
         required: false
         type: string
+      again:
+        description: Review it again even when its head commit was already reviewed
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -57,6 +62,7 @@ jobs:
           ONLY_REPOSITORY: ${{ inputs.repository || (github.event_name == 'pull_request' && github.event.repository.name) || '' }}
           ONLY_NUMBER: ${{ inputs.number || github.event.pull_request.number || '' }}
           OWN_REPOSITORY: ${{ github.event.repository.name }}
+          AGAIN: ${{ inputs.again && inputs.number != '' }}
         run: |
           selected='[]'
           if [ -n "$ONLY_NUMBER" ]; then
@@ -71,7 +77,7 @@ jobs:
             while IFS= read -r row; do
               sha=$(printf '%s' "$row" | jq -r .headRefOid)
               done=$(gh api "repos/$OWNER/$repo/commits/$sha/check-runs?check_name=Bot%20review" --jq .total_count)
-              if [ "$done" = 0 ]; then
+              if [ "$done" = 0 ] || [ "$AGAIN" = true ]; then
                 selected=$(printf '%s' "$selected" | jq -c --arg repo "$repo" --argjson row "$row" '. + [{repository: $repo, number: $row.number, head: $row.headRefOid}]')
               fi
             done < <(printf '%s' "$prs" | jq -c '.[] | {number, headRefOid}')
