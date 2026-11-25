@@ -126,6 +126,12 @@ jobs:
           { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/context" "$RUNNER_TEMP/out"
           gh pr view "$NUMBER" -R "$REPO" --json number,title,body,author,url,headRefName,headRefOid,baseRefName,files,commits > "$RUNNER_TEMP/context/pull-request.json"
+          jq -r '.body // ""' "$RUNNER_TEMP/context/pull-request.json" | awk '/github-pr-review-description:start/{f=1} f; /github-pr-review-description:end/{f=0}' > "$RUNNER_TEMP/block.md"
+          if [ ! -s "$RUNNER_TEMP/block.md" ]; then
+            echo 'The description has no bot description block yet: write it.' > "$RUNNER_TEMP/context/description-notes.md"
+          elif ! grep -q 'Before → ' "$RUNNER_TEMP/block.md"; then
+            echo 'The bot description block has no Before → After list: add one unless the diff changes no behavior (pure refactor, docs, tooling).' > "$RUNNER_TEMP/context/description-notes.md"
+          fi
           gh api "repos/$REPO/pulls/$NUMBER/files" --paginate | jq -s add > "$RUNNER_TEMP/context/files.json"
           gh api graphql -F owner="${REPO%/*}" -F name="${REPO#*/}" -F number="$NUMBER" -f query='
             query($owner: String!, $name: String!, $number: Int!) {
