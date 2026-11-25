@@ -56,7 +56,7 @@ In a checkout, write:
 
 ## Give the description the owner's format (in a checkout)
 
-Every pull request of the owner or of the bot carries the bot's description block (see [description-format.md](description-format.md)), between its markers, as its summary. On every review, compare the description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit, and write the whole new description to `$AGENT_OUT/pr-body.md` when:
+Every pull request of the owner or of the bot carries the bot's description block (see [description-format.md](description-format.md)), between its markers, as its summary. On every review, compare the description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit, and write the whole new description to `$AGENT_OUT/pr-body.md` when (`$AGENT_CONTEXT/description-notes.md`, when it exists, names what the workflow already found missing: act on it):
 
 - the block is missing: build it from the diff and from what the author's summary says, keeping its facts (versions, advisories, issue numbers, migration notes) in the block's lines;
 - the block has no Before → After list while the diff changes behavior: add it;
