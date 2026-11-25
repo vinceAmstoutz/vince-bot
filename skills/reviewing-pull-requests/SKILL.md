@@ -59,6 +59,7 @@ In a checkout, write:
 Every pull request of the owner or of the bot carries the bot's description block (see [description-format.md](description-format.md)), between its markers, as its summary. On every review, compare the description (`body` in `$AGENT_CONTEXT/pull-request.json`) with the **whole** diff, not only the latest commit, and write the whole new description to `$AGENT_OUT/pr-body.md` when:
 
 - the block is missing: build it from the diff and from what the author's summary says, keeping its facts (versions, advisories, issue numbers, migration notes) in the block's lines;
+- the block has no Before → After list while the diff changes behavior: add it;
 - the block no longer covers the whole diff, or announces something the diff does not do (a pull request that grew with new commits needs its description to grow too): rewrite what lies between the markers;
 - the author's description repeats what the block says: remove the repeated parts.
 

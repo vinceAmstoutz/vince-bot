@@ -20,9 +20,9 @@ The bot writes this block, markers included, and replaces only what lies between
 
 - Write for the people who use the project, not for those who read its code: outcomes, not file names or class names.
 - Pick emojis that say what kind of change each line is (🏷️ naming, 🛠️ behavior, 📖 docs, 🔑 configuration or secrets, 🐛 fix, 🚀 performance, 🔒 security, 🧪 tests).
-- Keep the Before → After list to the behavior changes; drop it when nothing behaves differently.
+- The Before → After list is required whenever something behaves differently; keep it to the behavior changes, and drop it only when nothing does (a pure refactor, docs, tooling).
 - Nothing outside the block repeats it: what the author wrote below stays only when the block does not cover it and the diff does not show it.
-- When the repository's rules impose a pull request template, keep every required section and put the block inside the section meant for the summary, within its length limit (shorten the block, never break the rule).
+- When the repository's rules impose a pull request template, keep every required section and put the block inside the section meant for the summary, within its length limit: shorten the intro and the bullets first and keep at least one Before → After line; never break the rule.
 
 Example:
 
