@@ -143,6 +143,20 @@ jobs:
           required-output: verdict.json
           max-turns: "60"
 
+      - name: Seal the summary for the owner
+        env:
+          BOT_MEMORY_KEY: ${{ secrets.BOT_MEMORY_KEY }}
+        run: sh bot/scripts/owner-summary.sh seal "$OUT/summary.md" "$RUNNER_TEMP/owner-summary"
+
+      - name: Hand the sealed summary to the owner
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: owner-summary-${{ matrix.repository }}
+          path: ${{ runner.temp }}/owner-summary/summary.md.enc
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
       - name: Create the issues token
         id: write-token
         if: steps.context.outputs.private == 'true'
