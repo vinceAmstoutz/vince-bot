@@ -29,4 +29,9 @@ input=$(printf '%s' "$payload" | jq '.variables.input')
 [ "$(printf '%s' "$input" | jq -r '.fileChanges.additions[] | select(.path == "kept.txt") | .contents' | base64 -d)" = new ] || fail 'contents'
 [ "$(printf '%s' "$input" | jq -r '[.fileChanges.deletions[].path] | join(",")')" = removed.txt ] || fail 'deletions'
 
+# A commit larger than one command-line argument may hold (128 KiB on Linux) still makes a payload.
+for i in 1 2 3; do head -c 120000 /dev/urandom | base64 -w0 > "$work/large-$i.txt"; done
+payload=$(bash "$root/scripts/commit-payload.sh" "$work" owner/repo main "$head" 'fix: something large') || fail 'a large commit makes no payload'
+[ "$(printf '%s' "$payload" | jq -r '.variables.input.fileChanges.additions[] | select(.path == "large-2.txt") | .contents' | base64 -d)" = "$(cat "$work/large-2.txt")" ] || fail 'contents of a large commit'
+
 echo 'commit_payload_test: ok'

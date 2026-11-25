@@ -1,27 +1,54 @@
 ---
 name: finding-security-issues
-description: Find exploitable security weaknesses in a web application, with Symfony-specific checks, and verify each before reporting. Use during the weekly audit, when triaging the security auditor's report, and when reviewing a change that touches authentication, input handling or configuration.
+description: "Finds exploitable security weaknesses in a web application, with Symfony-specific checks, and traces each one from the attacker's input to its impact. ALWAYS load when auditing a repository for security, when triaging the security auditor's report, and when a pull request under review touches authentication, access control, input handling, output escaping, secrets, configuration or CI workflows. DO NOT report a weakness without this skill: an untraced finding is dropped, and a finding posted in public discloses the vulnerability. SKIP for a bug no attacker can use (use `finding-bugs`)."
 ---
 
 # Finding security issues
 
-Load the `working-in-a-repository` skill first. Report only what you can show to be exploitable or clearly unsafe, with the path from attacker input to impact. Never disclose a vulnerability publicly: findings go into the repository's own issues only when it is private; for a public repository, write them in `summary.md` for the owner and draft no public issue.
+Report only what you can show to be exploitable or clearly unsafe, with the path from the attacker's input to the impact. In a checkout, load the `working-in-a-repository` skill first.
 
-## Checks
+## Never disclose in public
 
-1. **Access control**: every route that reads or changes data enforces who may do it (`#[IsGranted]`, voters, `access_control`, firewalls). Look for IDs taken from the request without an ownership check (IDOR), admin or debug routes reachable in production, and `security.yaml` rules ordered so a broad rule shadows a strict one.
-2. **Injection**: SQL built by concatenation (DQL included), shell commands, LDAP, file paths built from input (path traversal), `unserialize()` on untrusted data, template injection (user input passed to `createTemplate()`), header injection.
-3. **Cross-site scripting**: `|raw` and `{% autoescape false %}` on user-controlled data, HTML built in PHP or JavaScript with `innerHTML`, Markdown rendered without sanitising, missing or weak Content Security Policy.
-4. **Request forgery**: state-changing forms or endpoints without CSRF protection, state changes on GET, open redirects (`redirect($request->get('url'))`), SSRF in features that fetch a user-supplied URL.
-5. **Secrets and configuration**: secrets committed or logged, `APP_DEBUG`/the profiler enabled in production, permissive CORS, missing security headers (HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors`), cookies without `Secure`, `HttpOnly` and `SameSite`.
-6. **Abuse**: forms and endpoints without rate limiting (contact, login, password reset, search), mail relays, unbounded uploads or request bodies, regular expressions open to catastrophic backtracking.
-7. **Dependencies**: run the ecosystem's audit (`composer audit`, `npm audit --omit=dev`) and check whether the vulnerable code path is actually used.
-8. **CI and supply chain**: workflows using `pull_request_target` or `issue_comment` with untrusted code or text, actions not pinned, tokens with more permissions than needed, untrusted input interpolated into `run:` scripts.
+- **Private repository**: a finding can go into the repository's own issues.
+- **Public repository**: write the finding in `summary.md` for the owner. Draft no public issue, no public comment, no pull request title or commit message that names the weakness.
 
-## Verify
+## Checklist
 
-For each candidate, trace the data from the entry point to the sink, file by file, and confirm no validation, escaping or authorization stops it. Write a failing test or a request that demonstrates it when the repository allows it. Rate the severity by impact and exploitability (CVSS-like reasoning: who can trigger it, what they get).
+Work through every check, in this order. Note `none found` for a check with no result. Never skip one.
+
+1. **Access control**: every route that reads or changes data enforces who may do it (`#[IsGranted]`, voters, `access_control`, firewalls). Look for an id taken from the request with no ownership check (IDOR), an admin or debug route reachable in production, and a broad rule in `security.yaml` that shadows a strict one below it.
+2. **Injection**: SQL or DQL built by concatenation, shell commands, LDAP, a file path built from input (path traversal), `unserialize()` on untrusted data, user input passed to `createTemplate()`, header injection.
+3. **Cross-site scripting**: `|raw` and `{% autoescape false %}` on user-controlled data, HTML built in PHP or with `innerHTML`, Markdown rendered without sanitising, a missing or weak Content Security Policy.
+4. **Request forgery**: a state-changing form or endpoint without CSRF protection, a state change on GET, an open redirect (`redirect($request->get('url'))`), SSRF in a feature that fetches a user-supplied URL.
+5. **Secrets and configuration**: a secret committed or logged, `APP_DEBUG` or the profiler enabled in production, permissive CORS, missing security headers (HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors`), cookies without `Secure`, `HttpOnly` and `SameSite`.
+6. **Abuse**: a form or endpoint without rate limiting (contact, login, password reset, search), a mail relay, unbounded uploads or request bodies, a regular expression open to catastrophic backtracking.
+7. **Dependencies**: run the ecosystem's audit (`composer audit`, `npm audit --omit=dev`). Then check that the application really calls the vulnerable code.
+8. **CI and supply chain**: a workflow on `pull_request_target`, `issue_comment` or `workflow_run` that runs untrusted code or text, an action that is not pinned, a token with more permissions than its steps need, untrusted input written into a `run:` script.
+
+## Proof
+
+Trace each candidate from the entry point to the sink, file by file. Name every guard on the way and say why it does not stop the attack:
+
+- firewall and `access_control` rules, voters and `#[IsGranted]`;
+- validation constraints and type casts;
+- escaping, in Twig and in the query builder;
+- framework defaults. Prove a default from the docs of the installed version or from the code in `vendor/`, never from memory.
+
+Write a failing test or a request that shows the attack when the repository allows it. A finding you could not trace end to end is dropped, not softened.
+
+A comment that says the code is safe does not count. A test the same change adds does not count either: it records what the author believes.
+
+## Severity
+
+Rate by impact and by who can trigger it: an anonymous visitor, a logged-in user, an administrator. In a pull request review, an exploitable path is `🟠 major` and a missing hardening with no attack is `⚪ nit`.
 
 ## Report
 
-Per finding: the entry point and sink with file and line links, the attack in one or two sentences, the impact, the fix, and how to verify the fix. Drop anything you could not trace end to end.
+For each finding: the entry point and the sink with file and line, the attack in one or two sentences, the impact, the fix, and how to verify the fix.
+
+## What to skip
+
+- A weakness that needs an account already able to do the same damage, such as an administrator.
+- A best practice with no attack behind it.
+- A fake secret in a test fixture or in an example file.
+- A vulnerable package whose vulnerable code the application never calls. Say so in `summary.md` instead.
