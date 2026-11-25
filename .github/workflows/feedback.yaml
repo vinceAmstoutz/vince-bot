@@ -1,0 +1,204 @@
+name: Bot skills from feedback
+
+on:
+  schedule:
+    - cron: "19 4 * * 4"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Number of days of feedback to analyse
+        required: false
+        default: "7"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: feedback
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    name: Propose skill changes from the owner's feedback
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Create the read token for the watched repositories
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPOSITORIES }}
+          permission-pull-requests: read
+
+      - name: Create the read token for this repository
+        id: own-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          permission-pull-requests: read
+
+      # The feedback holds text from private repositories: it stays in a file on the runner and only its count is printed.
+      - name: Collect the owner's feedback
+        id: feedback
+        env:
+          WATCHED_TOKEN: ${{ steps.read-token.outputs.token }}
+          OWN_TOKEN: ${{ steps.own-token.outputs.token }}
+          SLUG: ${{ steps.read-token.outputs.app-slug }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+          DAYS: ${{ inputs.days || '7' }}
+        run: |
+          case "$DAYS" in ''|*[!0-9]*) echo '::error::days must be a number'; exit 1;; esac
+          { echo "CONTEXT=$RUNNER_TEMP/context"; echo "OUT=$RUNNER_TEMP/out"; } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/context" "$RUNNER_TEMP/out"
+          own=${GITHUB_REPOSITORY#*/}
+          open=$(GH_TOKEN=$OWN_TOKEN gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq "[.[] | select(.head.ref | startswith(\"$SLUG/skills-feedback-\"))] | length")
+          if [ "$open" != 0 ]; then
+            echo 'An earlier proposal is still open: merge or close it first.'
+            echo 'proceed=false' >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          since=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
+          : > "$RUNNER_TEMP/feedback.jsonl"
+          select_feedback() { # token repository
+            GH_TOKEN=$1 gh api graphql -F owner="$OWNER" -F name="$2" -f query='
+              query($owner: String!, $name: String!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequests(first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
+                    nodes {
+                      author { login }
+                      reviewThreads(first: 40) {
+                        nodes {
+                          isResolved isOutdated path
+                          comments(first: 15) {
+                            nodes { author { login } createdAt body reactions(first: 10) { nodes { content createdAt user { login } } } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' > "$RUNNER_TEMP/threads.json"
+            jq -c --arg bot "$SLUG" --arg owner "$OWNER" --arg since "$since" -f bot/scripts/select-feedback.jq "$RUNNER_TEMP/threads.json" >> "$RUNNER_TEMP/feedback.jsonl"
+          }
+          select_feedback "$OWN_TOKEN" "$own"
+          for repository in $(printf '%s' "$REPOSITORIES" | tr ',' ' '); do
+            if [ "$repository" != "$own" ]; then select_feedback "$WATCHED_TOKEN" "$repository"; fi
+          done
+          rm -f "$RUNNER_TEMP/threads.json"
+          jq -s add "$RUNNER_TEMP/feedback.jsonl" > "$RUNNER_TEMP/context/feedback.json"
+          count=$(jq length "$RUNNER_TEMP/context/feedback.json")
+          echo "The owner reacted to or wrote in $count review threads over the last $DAYS days."
+          if [ "$count" = 0 ]; then echo 'proceed=false' >> "$GITHUB_OUTPUT"; exit 0; fi
+          printf 'Improve the skills from the feedback of the last %s days.\n' "$DAYS" > "$RUNNER_TEMP/context/request.md"
+          echo 'proceed=true' >> "$GITHUB_OUTPUT"
+
+      # A second checkout: the agents load the skills of `bot`, so a proposal cannot change the rules that check it.
+      - name: Checkout the copy the agent edits
+        if: steps.feedback.outputs.proceed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: target
+          persist-credentials: false
+
+      - name: Propose skill changes
+        if: steps.feedback.outputs.proceed == 'true'
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: improving-skills-from-feedback
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          federation-rule-id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          organization-id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          service-account-id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          workspace-id: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+
+      - name: Check the proposal before it is published
+        if: steps.feedback.outputs.proceed == 'true'
+        uses: ./bot/.github/actions/run-agent
+        with:
+          workdir: target
+          skill: checking-before-posting
+          context-dir: ${{ env.CONTEXT }}
+          out-dir: ${{ env.OUT }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          memory-key: ${{ secrets.BOT_MEMORY_KEY }}
+          federation-rule-id: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
+          organization-id: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
+          service-account-id: ${{ vars.BOT_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          workspace-id: ${{ vars.BOT_ANTHROPIC_WORKSPACE_ID }}
+          model: ${{ vars.BOT_WORK_MODEL || 'opus' }}
+          required-output: verdict.json
+          max-turns: "60"
+
+      - name: Create the write token
+        if: steps.feedback.outputs.proceed == 'true'
+        id: write-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open the pull request
+        if: steps.feedback.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SLUG: ${{ steps.write-token.outputs.app-slug }}
+          HEAD: ${{ github.sha }}
+          REPOSITORIES: ${{ vars.BOT_REPOSITORIES }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$(jq -r '.approved' "$OUT/verdict.json")" != true ]; then
+            echo '::error::the check refused the proposal; nothing is published'; exit 1
+          fi
+          if [ "$(git -C target rev-parse HEAD)" != "$HEAD" ]; then
+            echo '::warning::the agent committed locally; its changes go into the signed commit instead'
+            git -C target reset -q --soft "$HEAD"
+          fi
+          git -C target add -A
+          if [ -z "$(git -C target diff --cached --name-only)" ]; then
+            echo 'The feedback warranted no skill change.'; exit 0
+          fi
+          if git -C target diff --cached --name-only --no-renames | grep -qv '^skills/'; then
+            echo '::error::the proposal changes files outside skills/; nothing is published'; exit 1
+          fi
+          test -s "$OUT/commit-message.txt" || { echo '::error::skill changes without a commit message'; exit 1; }
+          test -s "$OUT/pull-request.json" || { echo '::error::skill changes without a pull request'; exit 1; }
+          git -C target diff --cached --no-color -U0 | grep '^+' > "$RUNNER_TEMP/added.txt"
+          sh bot/scripts/assert-no-repository-name.sh "$REPOSITORIES" "$RUNNER_TEMP/added.txt" "$OUT/commit-message.txt" "$OUT/pull-request.json"
+          sh target/tests/skills_test.sh
+          branch="$SLUG/skills-feedback-$GITHUB_RUN_ID"
+          gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$HEAD" > /dev/null
+          created=$(bash bot/scripts/commit-payload.sh target "$REPO" "$branch" "$HEAD" "$(cat "$OUT/commit-message.txt")" \
+            | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid)
+          sh bot/scripts/assert-verified.sh "$REPO" "$created"
+          gh api "repos/$REPO/pulls" -f head="$branch" -f base="$(gh api "repos/$REPO" --jq .default_branch)" \
+            -f title="$(jq -r .title "$OUT/pull-request.json")" \
+            -f body="$(jq -r .body "$OUT/pull-request.json")
+
+          ---
+          _Proposed by vinceAmstoutz GitHub AI bot from the owner's feedback · [run]($RUN_URL)_" --silent
+          echo 'Opened the pull request.'
