@@ -108,6 +108,7 @@ jobs:
           max-turns: "60"
 
       - name: Seal the summary for the owner
+        id: seal
         env:
           BOT_MEMORY_KEY: ${{ secrets.BOT_MEMORY_KEY }}
         run: sh bot/scripts/owner-summary.sh seal "$OUT/summary.md" "$RUNNER_TEMP/owner-summary"
@@ -152,3 +153,24 @@ jobs:
             done < <(printf '%s' "$issue" | jq -r --slurpfile known "$CONTEXT/labels.json" '.labels // [] | .[] | select(. as $l | $known[0] | any(.name == $l))')
             gh api "repos/$REPO/issues" "$@" --silent
           done
+
+      - name: Create the reports token
+        id: reports-token
+        if: ${{ !cancelled() && steps.seal.outcome == 'success' && vars.BOT_REPORTS_REPOSITORY != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPORTS_REPOSITORY }}
+          permission-issues: write
+
+      - name: Tell the owner
+        if: ${{ !cancelled() && steps.seal.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.reports-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPORTS: ${{ vars.BOT_REPORTS_REPOSITORY }}
+          REPOSITORY: ${{ matrix.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: sh bot/scripts/owner-summary.sh post "$OUT/summary.md" "$OWNER" "$REPORTS" "Weekly audit of $REPOSITORY" "$RUN_URL"
