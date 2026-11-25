@@ -58,7 +58,8 @@ jobs:
           REPO: ${{ github.repository_owner }}/${{ matrix.repository }}
           SLUG: ${{ steps.read-token.outputs.app-slug }}
         run: |
-          if gh pr list -R "$REPO" --state open --limit 200 --json headRefName --jq '.[].headRefName' | grep -q "^$SLUG/tools-"; then
+          branches=$(gh pr list -R "$REPO" --state open --limit 200 --json headRefName --jq '.[].headRefName')
+          if grep -q "^$SLUG/tools-" <<< "$branches"; then
             echo '::notice::a tool update pull request is already open'
             exit 0
           fi
