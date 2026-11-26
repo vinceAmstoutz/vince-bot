@@ -86,6 +86,8 @@ Note `none found` for a category with no finding. Never leave one out.
     - a comment that tells history ("previously", "now uses … instead of") or only repeats the code: comments describe the code as it is now;
     - a wording problem in a doc, a skill or a prompt is `⚪ nit` at most. It is `🟠 major` only when a command or a path written there fails when followed literally.
 12. **Repository rules**: what the repository's rules forbid or require: a changelog entry, docs, the commit and title format, the pull request sections.
+    - Before you ask for a new changelog entry, find the last release tag (`git tag --sort=-creatordate`) and check that the changed behaviour exists at that tag (`git show <tag>:<path>`; in a sweep, read the file at that tag through the API). A fix of code added after the last release changes nothing a user saw: ask for no new entry, unless the repository's rules say so in words. Ask only to amend an existing entry when it is no longer true.
+    - Example: a fix to a command option that no release has shipped yet needs no bug-fix line.
 
 ## 4. Check the change as a whole
 
