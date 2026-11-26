@@ -61,6 +61,10 @@ for category in 'A01:2025' 'A02:2025' 'A03:2025' 'A04:2025' 'A05:2025' 'A06:2025
     || fail "finding-security-issues: the checklist has no $category item"
 done
 
+# A triaged issue names its OWASP category, the one the security checklist filed it under.
+grep -qE '^- `body`, in this order: .*OWASP category' "$root/skills/triaging-security-findings/SKILL.md" \
+  || fail 'triaging-security-findings: the issue body must name the OWASP category'
+
 # The review example is what the agent copies: it must keep the shape the workflow posts and tag every finding.
 example=$(awk '/^ *````json$/ { inside = 1; next } /^ *````$/ { inside = 0 } inside' "$root/skills/reviewing-pull-requests/SKILL.md")
 [ -n "$example" ] || fail 'reviewing-pull-requests: no review.json example'

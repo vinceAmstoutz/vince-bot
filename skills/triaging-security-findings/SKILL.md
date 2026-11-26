@@ -40,7 +40,7 @@ No other verdict exists. A finding you found "plausible" is `dropped: not traced
 Write `$AGENT_OUT/issues.json` as `[{"title": "...", "body": "...", "labels": ["..."]}]`, the most severe first, five at most:
 
 - `title`: the weakness and where, under 70 characters.
-- `body`, in this order: the severity, the attack path with file and line links on the default branch, the impact, the fix, how to verify it, and the finding's fingerprint from the report, so later runs recognise it.
+- `body`, in this order: the severity, the OWASP category the checklist of the `finding-security-issues` skill files the weakness under (such as `A01:2025 Broken access control`), the attack path with file and line links on the default branch, the impact, the fix, how to verify it, and the finding's fingerprint from the report, so later runs recognise it.
 - `labels`: only labels the repository already has (`security` when it exists).
 
 When the repository is public, write no issue: leave `issues.json` as `[]` and put the confirmed findings in `summary.md` for the owner.
