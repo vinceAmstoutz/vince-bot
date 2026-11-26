@@ -72,7 +72,7 @@ jobs:
           COMMENT_TYPE: ${{ inputs.comment_type || (github.event_name == 'pull_request_review_comment' && 'review') || 'issue' }}
           OWN_REPOSITORY: ${{ github.event.repository.name }}
         run: |
-          since=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
+          since=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ)
           selected='[]'
           if [ -n "$ONLY_COMMENT" ]; then
             case "$ONLY_COMMENT" in *[!0-9]*) echo '::error::comment_id must be numeric'; exit 1;; esac
@@ -93,7 +93,7 @@ jobs:
               id=$(printf '%s' "$row" | jq -r .comment_id)
               if [ "$(printf '%s' "$row" | jq -r .type)" = review ]; then reactions="repos/$OWNER/$repo/pulls/comments/$id/reactions"; else reactions="repos/$OWNER/$repo/issues/comments/$id/reactions"; fi
               claimed=$(gh api "$reactions" | jq --arg bot "$SLUG[bot]" '[.[] | select(.user.login == $bot)] | length')
-              if [ "$claimed" = 0 ]; then
+              if [ "$claimed" = 0 ] && [ "$(printf '%s' "$selected" | jq length)" -lt 5 ]; then
                 gh api "$reactions" -f content=+1 --silent
                 gh api "$reactions" -f content=eyes --silent
                 body=$(printf '%s' "$mentions" | jq -r --argjson id "$id" '.[] | select(.comment_id == $id) | .body')
@@ -102,7 +102,7 @@ jobs:
               fi
             done < <(printf '%s' "$mentions" | jq -c '.[] | {comment_id, number, is_pr, type, reply_to}')
           done
-          echo "matrix=$(printf '%s' "$selected" | jq -c '.[:5]')" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(printf '%s' "$selected" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   work:
     name: Handle the mention
