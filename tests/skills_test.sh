@@ -55,6 +55,16 @@ skill_names | sort -u | while IFS= read -r name; do
   [ -f "$root/skills/$name/SKILL.md" ] || fail "the $name skill is named but skills/$name/SKILL.md does not exist"
 done
 
+# The security checklist is what an audit walks through: no OWASP Top 10 category may drop out of it.
+for category in 'A01:2025' 'A02:2025' 'A03:2025' 'A04:2025' 'A05:2025' 'A06:2025' 'A07:2025' 'A08:2025' 'A09:2025' 'A10:2025'; do
+  grep -qE "^[0-9]+\. \*\*$category " "$root/skills/finding-security-issues/SKILL.md" \
+    || fail "finding-security-issues: the checklist has no $category item"
+done
+
+# A triaged issue names its OWASP category, the one the security checklist filed it under.
+grep -qE '^- `body`, in this order: .*OWASP category' "$root/skills/triaging-security-findings/SKILL.md" \
+  || fail 'triaging-security-findings: the issue body must name the OWASP category'
+
 # The review example is what the agent copies: it must keep the shape the workflow posts and tag every finding.
 example=$(awk '/^ *````json$/ { inside = 1; next } /^ *````$/ { inside = 0 } inside' "$root/skills/reviewing-pull-requests/SKILL.md")
 [ -n "$example" ] || fail 'reviewing-pull-requests: no review.json example'
