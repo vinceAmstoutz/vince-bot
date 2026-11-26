@@ -130,7 +130,7 @@ jobs:
           if [ ! -s "$RUNNER_TEMP/block.md" ]; then
             echo 'The description has no bot description block yet: write it.' > "$RUNNER_TEMP/context/description-notes.md"
           elif ! grep -q 'Before → ' "$RUNNER_TEMP/block.md"; then
-            echo 'The bot description block has no Before → After list: add one unless the diff changes no behavior (pure refactor, docs, tooling).' > "$RUNNER_TEMP/context/description-notes.md"
+            echo 'The bot description block has no Before → After list: add one unless no user does, sees or gets anything different (docs wording, links or formatting, pure refactor, tooling).' > "$RUNNER_TEMP/context/description-notes.md"
           fi
           gh api "repos/$REPO/pulls/$NUMBER/files" --paginate | jq -s add > "$RUNNER_TEMP/context/files.json"
           gh api graphql -F owner="${REPO%/*}" -F name="${REPO#*/}" -F number="$NUMBER" -f query='
