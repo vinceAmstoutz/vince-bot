@@ -42,7 +42,7 @@ Check each of these files that exists: `commit-message.txt`, `pull-request.json`
 - **Thread reply** (`reply.md`): one line of at most 200 characters starting with ✅, 💬 or ❓. It says only what changed, or the answer. Shorten it rather than lose the meaning.
 - **Pull request description** (`pr-body.md`):
   - it passes the repository's own pull request check when there is one, for example `PR_TITLE=… PR_BODY="$(cat pr-body.md)" BASE_REF=… sh .github/scripts/check-pull-request.sh`;
-  - it follows the bot's description format inside the block, with a Before → After list whenever the diff changes behavior;
+  - it follows the bot's description format inside the block, with a Before → After list whenever a user does, sees or gets something different, docs recommendations included;
   - nothing outside the block repeats it. What stays outside, unchanged, is only what the author added that the block does not cover and the diff does not show (no file lists, no code descriptions), and what the repository's pull request rules require;
   - when it does not pass, shorten the block's intro and bullets until it does, and keep its Before → After list. Delete `pr-body.md` only when it still cannot pass.
 - **Skill changes from feedback**, when `$AGENT_CONTEXT/feedback.json` exists:
