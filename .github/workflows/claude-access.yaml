@@ -17,7 +17,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Check the workload identity federation rule
+      - name: Check the federation rule and the header its token works in
         env:
           FEDERATION_RULE_ID: ${{ vars.BOT_ANTHROPIC_FEDERATION_RULE_ID }}
           ORGANIZATION_ID: ${{ vars.BOT_ANTHROPIC_ORGANIZATION_ID }}
@@ -35,3 +35,9 @@ jobs:
           printf '%s' "$response" | jq 'with_entries(if (.key | test("token$")) then .value = "<redacted>" else . end)'
           printf '%s' "$response" | jq -e '.access_token' > /dev/null || { echo '::error::the token exchange was refused'; exit 1; }
           echo 'Claude credentials obtained through workload identity federation.'
+          token=$(printf '%s' "$response" | jq -r .access_token)
+          echo "::add-mask::$token"
+          for header in "x-api-key: $token" "Authorization: Bearer $token"; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models -H 'anthropic-version: 2023-06-01' -H "$header")
+            echo "GET /v1/models with the token in ${header%%:*}: HTTP $status"
+          done
