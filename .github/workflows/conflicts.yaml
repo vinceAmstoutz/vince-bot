@@ -1,0 +1,145 @@
+name: Bot conflicts
+
+# Merges the base branch into each pull request of the owner and the bot that conflicts with it, in one signed merge
+# commit. Only the CHANGELOG and the accepted compatibility differences are resolved, by script: a conflict anywhere
+# else is left to the owner. No agent, no Claude cost. Limited to symfony-security-auditor on purpose.
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: conflicts
+  cancel-in-progress: false
+
+env:
+  REPOSITORY: symfony-security-auditor
+  SCRIPTABLE: CHANGELOG.md tests/Phpunit/Compat/accepted-differences.php
+
+jobs:
+  merge:
+    name: Merge the base branch into the conflicting pull requests
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bot
+          persist-credentials: false
+
+      - name: Create the read token
+        id: read-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ env.REPOSITORY }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Find the conflicting pull requests
+        id: select
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SLUG: ${{ steps.read-token.outputs.app-slug }}
+        run: |
+          for attempt in 1 2 3 4; do
+            prs=$(gh pr list -R "$OWNER/$REPOSITORY" --state open --limit 100 \
+              --json number,headRefName,headRefOid,baseRefName,author,isCrossRepository,mergeable,isDraft)
+            printf '%s' "$prs" | jq -e 'any(.[]; .mergeable == "UNKNOWN")' > /dev/null || break
+            [ "$attempt" = 4 ] || sleep 15
+          done
+          selected=$(printf '%s' "$prs" | jq -c --arg owner "$OWNER" --arg bot "$SLUG" -f bot/scripts/select-conflicting-prs.jq)
+          echo "prs=$selected" >> "$GITHUB_OUTPUT"
+          echo "::notice::$(printf '%s' "$selected" | jq length) conflicting pull request(s)"
+
+      - name: Checkout the repository
+        if: steps.select.outputs.prs != '[]'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ env.REPOSITORY }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up PHP
+        if: steps.select.outputs.prs != '[]'
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.5"
+          coverage: none
+          tools: none
+
+      - name: Create the write token
+        id: write-token
+        if: steps.select.outputs.prs != '[]'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ env.REPOSITORY }}
+          permission-contents: write
+
+      - name: Merge, check and commit
+        if: steps.select.outputs.prs != '[]'
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ env.REPOSITORY }}
+          PRS: ${{ steps.select.outputs.prs }}
+        run: |
+          git -C target config user.name bot
+          git -C target config user.email bot@localhost
+          status=0
+          for pr in $(printf '%s' "$PRS" | jq -c '.[]'); do
+            number=$(printf '%s' "$pr" | jq -r .number)
+            head=$(printf '%s' "$pr" | jq -r .headRefOid)
+            branch=$(printf '%s' "$pr" | jq -r .headRefName)
+            base=$(printf '%s' "$pr" | jq -r .baseRefName)
+            git -C target fetch -q origin "$head" "+refs/heads/$base:refs/remotes/origin/$base"
+            git -C target checkout -q --detach "$head"
+            git -C target reset -q --hard
+            if ! sh bot/scripts/merge-base-branch.sh target "origin/$base" $SCRIPTABLE; then
+              echo "::notice::#$number has a conflict the script does not resolve: left to the owner"
+              continue
+            fi
+            merged=$(git -C target diff --cached --name-only HEAD)
+            if printf '%s\n' "$merged" | grep -qx tests/Phpunit/Compat/accepted-differences.php \
+              && ! php -l target/tests/Phpunit/Compat/accepted-differences.php > /dev/null; then
+              echo "::error::#$number: the merged accepted differences are not valid PHP"
+              git -C target merge --abort
+              status=1
+              continue
+            fi
+            if [ -f target/.github/scripts/check-changelog.sh ] \
+              && ! (cd target && sh .github/scripts/check-changelog.sh CHANGELOG.md > /dev/null); then
+              echo "::error::#$number: the merged CHANGELOG fails check-changelog.sh"
+              git -C target merge --abort
+              status=1
+              continue
+            fi
+            if ! commit=$(sh bot/scripts/git-data-merge.sh target "$REPO" "$branch" "$head" \
+              "$(git -C target rev-parse "origin/$base")" "Merge branch '$base' into $branch"); then
+              echo "::warning::#$number: its branch moved meanwhile, the next run takes it"
+              git -C target merge --abort
+              continue
+            fi
+            if ! sh bot/scripts/assert-verified.sh "$REPO" "$commit"; then
+              gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$head" -F force=true --silent
+              status=1
+              continue
+            fi
+            echo "::notice::#$number: merged its base branch"
+            git -C target merge --abort 2> /dev/null || git -C target reset -q --hard
+          done
+          exit "$status"
