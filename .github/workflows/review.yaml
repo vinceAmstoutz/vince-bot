@@ -212,6 +212,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ matrix.repository }}
           permission-checks: write
+          permission-contents: write
           permission-pull-requests: write
 
       - name: Post the review
