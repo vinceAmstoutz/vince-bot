@@ -9,7 +9,8 @@ workdir=$1 repo=$2 branch=$3 head=$4 base=$5 message=$6
 
 head_tree=$(gh api "repos/$repo/git/commits/$head" --jq .tree.sha)
 entries='[]'
-for path in $(git -C "$workdir" diff --cached --no-renames --name-only HEAD); do
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
   mode=$(git -C "$workdir" ls-files -s -- "$path" | cut -d' ' -f1)
   if [ -n "$mode" ]; then
     blob=$(base64 -w0 "$workdir/$path" | jq -Rn '{content: input, encoding: "base64"}' \
@@ -20,7 +21,9 @@ for path in $(git -C "$workdir" diff --cached --no-renames --name-only HEAD); do
     entry=$(jq -nc --arg path "$path" --arg mode "$mode" '{path: $path, mode: $mode, type: "blob", sha: null}')
   fi
   entries=$(printf '%s' "$entries" | jq -c --argjson entry "$entry" '. + [$entry]')
-done
+done <<PATHS
+$(git -C "$workdir" -c core.quotePath=false diff --cached --no-renames --name-only HEAD)
+PATHS
 
 tree=$(jq -n --arg base "$head_tree" --argjson tree "$entries" '{base_tree: $base, tree: $tree}' \
   | gh api "repos/$repo/git/trees" --input - --jq .sha)

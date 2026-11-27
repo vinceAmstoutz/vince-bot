@@ -18,12 +18,15 @@ needs_hand() {
   exit 3
 }
 
-conflicts=$(git -C "$workdir" diff --name-only --diff-filter=U)
-for path in $conflicts; do
-  case " $* " in *" $path "*) ;; *) needs_hand "$path" ;; esac
-done
+scriptable=$(printf '%s\n' "$@")
+conflicts=$(git -C "$workdir" -c core.quotePath=false diff --name-only --diff-filter=U)
+while IFS= read -r path; do
+  printf '%s\n' "$scriptable" | grep -qxF -- "$path" || needs_hand "$path"
+done <<PATHS
+$conflicts
+PATHS
 
-for path in $conflicts; do
+while IFS= read -r path; do
   tmp=$(mktemp -d)
   git -C "$workdir" show ":1:$path" > "$tmp/base"
   git -C "$workdir" show ":2:$path" > "$tmp/ours"
@@ -35,4 +38,6 @@ for path in $conflicts; do
   cp "$tmp/merged" "$workdir/$path"
   git -C "$workdir" add -- "$path"
   rm -rf "$tmp"
-done
+done <<PATHS
+$conflicts
+PATHS

@@ -74,4 +74,14 @@ git -C "$r" checkout -q pr
 sh "$root/scripts/merge-base-branch.sh" "$r" 1.x list.php || fail 'entry conflict not resolved'
 [ "$(cat "$r/list.php")" = "$({ echo '<?php'; echo 'return ['; entry a; entry base; entry pr; echo '];'; })" ] || fail "entries interleaved: $(cat "$r/list.php")"
 
+git -C "$work/union" merge --abort
+git -C "$work/union" mv CHANGELOG.md 'notes é.md'
+git -C "$work/union" commit -qm rename
+git -C "$work/union" checkout -q 1.x
+git -C "$work/union" mv CHANGELOG.md 'notes é.md'
+git -C "$work/union" commit -qm rename
+git -C "$work/union" checkout -q pr
+sh "$root/scripts/merge-base-branch.sh" "$work/union" 1.x 'notes é.md' > /dev/null || fail 'a conflict in a path with a space and an accent not resolved'
+[ "$(tail -n 2 "$work/union/notes é.md")" = "$(printf -- '- Base entry.\n- PR entry.')" ] || fail "kept $(cat "$work/union/notes é.md")"
+
 echo 'merge_base_branch_test: ok'
