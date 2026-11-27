@@ -145,14 +145,14 @@ In a checkout, write two files.
       "body": "⚪ nit: What is wrong over these lines, and the fix."
     }
   ],
-  "resolve": ["<thread id>"]
+  "resolve": [{ "thread": "<thread id>", "outcome": "fixed", "note": "What the diff changed, in one sentence of 150 characters or fewer." }]
 }
 ````
 
 - **Body**: it starts with `🟠 major: ` or `⚪ nit: `, then says what goes wrong, what proves it, and the fix. One comment per finding.
 - **Lines**: `path` is relative to the repository root. `line`, and `start_line` for a range, are line numbers in the **new** version of the file, on lines the diff shows: the added or context lines of the patches in `$AGENT_CONTEXT/files.json`. A finding elsewhere still gets a comment with its file and line: the workflow moves it into the review body.
 - **Suggestion**: when the fix replaces the commented lines, end the body with a ` ```suggestion ` block. It holds the **complete** replacement for exactly the lines from `start_line` (or `line`) to `line`, with the file's indentation, so the author applies it in one click. Describe a larger fix in words.
-- **Resolve**: list every unresolved thread of `$AGENT_CONTEXT/previous-threads.json` whose finding the current diff fixes or makes irrelevant, or that the owner answered with a reason you accept. The workflow resolves them. Keep an unresolved thread open while its finding still applies. Leave the key out when there is none.
+- **Resolve**: list every unresolved thread of `$AGENT_CONTEXT/previous-threads.json` whose finding the current diff fixes or makes irrelevant (`"outcome": "fixed"`), or that the owner answered with a reason you accept (`"outcome": "declined"`). Give each a `note`: one sentence of 150 characters or fewer saying what the diff changed, or for `declined` why it stays as is. The workflow replies ✅ or ❌ with that note in the thread and resolves it, so nobody has to write "fixed". Keep an unresolved thread open while its finding still applies. Leave the key out when there is none.
 - **Nothing to say**: write `{"summary": "No findings.", "comments": []}`.
 
 `$AGENT_OUT/summary.md` holds, in this order:

@@ -242,16 +242,19 @@ jobs:
           resolved='[]'
           unresolved=0
           errors=''
-          for thread in $(jq -r '.resolve // [] | .[]' "$OUT/review.json"); do
+          while IFS= read -r item; do
+            thread=$(printf '%s' "$item" | jq -r .thread)
             jq -e --arg id "$thread" 'any(.[]; .id == $id and (.isResolved | not))' "$CONTEXT/previous-threads.json" > /dev/null || continue
-            if error=$(gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent 2>&1); then
+            mark=$(printf '%s' "$item" | jq -r 'if .outcome == "declined" then "❌ " + ((.note // "") | .[0:150] | if . == "" then "Not changed." else . end) else "✅ " + ((.note // "") | .[0:150] | if . == "" then "Fixed." else . end) end')
+            if error=$(gh api graphql -f id="$thread" -f body="$mark" -f query='mutation($id: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) { comment { id } } }' --silent 2>&1) \
+              && error=$(gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent 2>&1); then
               resolved=$(printf '%s' "$resolved" | jq -c --arg id "$thread" '. + [$id]')
             else
               unresolved=$((unresolved + 1))
               errors="$errors$error"$'\n'
               echo "::error::a fixed review thread could not be resolved: $error"
             fi
-          done
+          done < <(jq -c '.resolve // [] | .[] | if type == "string" then {thread: ., outcome: "fixed"} else . end' "$OUT/review.json")
           echo "Resolved $(printf '%s' "$resolved" | jq length) fixed review threads."
           title=$(jq -r '.summary' "$OUT/review.json" | head -n 1 | sed -E 's/^[-*#> ]+//; s/\*\*|__|`//g' | cut -c1-120)
           if [ "$unresolved" -gt 0 ]; then
