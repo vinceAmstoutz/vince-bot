@@ -31,9 +31,17 @@ git -C "$work/union" rev-parse -q --verify MERGE_HEAD > /dev/null || fail 'not l
 
 repo code
 status=0
-sh "$root/scripts/merge-base-branch.sh" "$work/code" 1.x 2> "$work/code.err" || status=$?
+printf 'pr\n' > "$work/code/other"
+git -C "$work/code" add other
+git -C "$work/code" commit -qm other
+git -C "$work/code" checkout -q 1.x
+printf '1.x\n' > "$work/code/other"
+git -C "$work/code" add other
+git -C "$work/code" commit -qm other
+git -C "$work/code" checkout -q pr
+sh "$root/scripts/merge-base-branch.sh" "$work/code" 1.x CHANGELOG.md > "$work/code.out" 2> /dev/null || status=$?
 [ "$status" = 3 ] || fail "a conflict outside the scriptable paths exited $status"
-grep -q 'CHANGELOG.md' "$work/code.err" || fail 'the conflicting path is not named'
+[ "$(cat "$work/code.out")" = "$(printf 'CHANGELOG.md\nother')" ] || fail "printed $(cat "$work/code.out")"
 [ -z "$(git -C "$work/code" status --porcelain)" ] || fail 'the merge was not aborted'
 
 repo edit
@@ -44,7 +52,7 @@ sed -i 's/Old entry/Old entry, edited on 1.x/' "$work/edit/CHANGELOG.md"
 git -C "$work/edit" commit -qam edit
 git -C "$work/edit" checkout -q pr
 status=0
-sh "$root/scripts/merge-base-branch.sh" "$work/edit" 1.x CHANGELOG.md 2> /dev/null || status=$?
+sh "$root/scripts/merge-base-branch.sh" "$work/edit" 1.x CHANGELOG.md > /dev/null 2>&1 || status=$?
 [ "$status" = 3 ] || fail "a conflict that edits a line exited $status"
 [ -z "$(git -C "$work/edit" status --porcelain)" ] || fail 'the edit merge was not aborted'
 

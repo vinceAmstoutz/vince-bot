@@ -2,7 +2,7 @@ name: Bot conflicts
 
 # Merges the base branch into each pull request of the owner and the bot that conflicts with it, in one signed merge
 # commit. Only the CHANGELOG and the accepted compatibility differences are resolved, by script: a conflict anywhere
-# else is left to the owner. No agent, no Claude cost. Limited to symfony-security-auditor on purpose.
+# else is left to the owner, who is mentioned once per head commit. No agent, no Claude cost. Limited to symfony-security-auditor on purpose.
 
 on:
   schedule:
@@ -90,11 +90,13 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ env.REPOSITORY }}
           permission-contents: write
+          permission-pull-requests: write
 
       - name: Merge, check and commit
         if: steps.select.outputs.prs != '[]'
         env:
           GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.repository_owner }}/${{ env.REPOSITORY }}
           PRS: ${{ steps.select.outputs.prs }}
         run: |
@@ -109,8 +111,20 @@ jobs:
             git -C target fetch -q origin "$head" "+refs/heads/$base:refs/remotes/origin/$base"
             git -C target checkout -q --detach "$head"
             git -C target reset -q --hard
-            if ! sh bot/scripts/merge-base-branch.sh target "origin/$base" $SCRIPTABLE; then
+            resolved=0
+            sh bot/scripts/merge-base-branch.sh target "origin/$base" $SCRIPTABLE > "$RUNNER_TEMP/paths" || resolved=$?
+            if [ "$resolved" = 3 ]; then
               echo "::notice::#$number has a conflict the script does not resolve: left to the owner"
+              if ! gh api "repos/$REPO/issues/$number/comments" --paginate --jq '.[].body' | grep -qF "<!-- bot-conflicts $head -->"; then
+                sh bot/scripts/conflict-comment.sh "$OWNER" "$base" "$head" < "$RUNNER_TEMP/paths" \
+                  | gh api "repos/$REPO/issues/$number/comments" -F body=@- --silent
+              fi
+              continue
+            fi
+            if [ "$resolved" != 0 ]; then
+              echo "::error::#$number: the merge failed"
+              git -C target merge --abort 2> /dev/null || true
+              status=1
               continue
             fi
             merged=$(git -C target diff --cached --name-only HEAD)
@@ -135,7 +149,8 @@ jobs:
               continue
             fi
             if ! sh bot/scripts/assert-verified.sh "$REPO" "$commit"; then
-              gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$head" -F force=true --silent
+              echo "::error::#$number: GitHub does not show the merge commit as Verified, the branch is left as is"
+              git -C target merge --abort
               status=1
               continue
             fi
