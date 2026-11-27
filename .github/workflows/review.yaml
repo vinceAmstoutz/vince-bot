@@ -241,12 +241,14 @@ jobs:
           fi
           resolved='[]'
           unresolved=0
+          errors=''
           for thread in $(jq -r '.resolve // [] | .[]' "$OUT/review.json"); do
             jq -e --arg id "$thread" 'any(.[]; .id == $id and (.isResolved | not))' "$CONTEXT/previous-threads.json" > /dev/null || continue
             if error=$(gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent 2>&1); then
               resolved=$(printf '%s' "$resolved" | jq -c --arg id "$thread" '. + [$id]')
             else
               unresolved=$((unresolved + 1))
+              errors="$errors$error"$'\n'
               echo "::error::a fixed review thread could not be resolved: $error"
             fi
           done
@@ -255,7 +257,7 @@ jobs:
           if [ "$unresolved" -gt 0 ]; then
             conclusion=failure
             title="$unresolved fixed review thread(s) could not be resolved"
-            printf '\n\n%s fixed review thread(s) could not be resolved: %s\n' "$unresolved" "$error" >> "$OUT/summary.md"
+            printf '\n\n%s fixed review thread(s) could not be resolved:\n\n%s' "$unresolved" "$errors" >> "$OUT/summary.md"
           fi
           if [ -s "$OUT/pr-body.md" ] && [ "$(jq -r .approved "$OUT/verdict.json")" = true ]; then
             current=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.body // ""')
