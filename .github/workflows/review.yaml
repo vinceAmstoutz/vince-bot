@@ -256,7 +256,8 @@ jobs:
               echo 'The description changed during the review: giving the current one the format again in a minute.'
               sleep 60
               GH_TOKEN=$DISPATCH_TOKEN gh workflow run review.yaml -R "$GITHUB_REPOSITORY" \
-                -f repository="$TARGET" -f number="$NUMBER" -f again=true -f description-only=true
+                -f repository="$TARGET" -f number="$NUMBER" -f again=true -f description-only=true \
+                || echo '::warning::the description pass could not be started'
             fi
           fi
           if [ "$DESCRIPTION_ONLY" != true ]; then
