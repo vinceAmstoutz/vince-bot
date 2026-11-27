@@ -259,5 +259,7 @@ jobs:
                 -f repository="$TARGET" -f number="$NUMBER" -f again=true -f description-only=true
             fi
           fi
-          gh api "repos/$REPO/check-runs" -f name='Bot review' -f head_sha="$HEAD" -f status=completed -f conclusion="$conclusion" \
-            -f "output[title]=$(jq -r '.summary' "$OUT/review.json" | head -n 1 | sed -E 's/^[-*#> ]+//; s/\*\*|__|`//g' | cut -c1-120)" -f "output[summary]=$(cat "$OUT/summary.md")" --silent
+          if [ "$DESCRIPTION_ONLY" != true ]; then
+            gh api "repos/$REPO/check-runs" -f name='Bot review' -f head_sha="$HEAD" -f status=completed -f conclusion="$conclusion" \
+              -f "output[title]=$(jq -r '.summary' "$OUT/review.json" | head -n 1 | sed -E 's/^[-*#> ]+//; s/\*\*|__|`//g' | cut -c1-120)" -f "output[summary]=$(cat "$OUT/summary.md")" --silent
+          fi
