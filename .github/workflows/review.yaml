@@ -20,6 +20,11 @@ on:
         required: false
         type: boolean
         default: false
+      description-only:
+        description: Only give the description the owner's format again, without posting a review (sent when the description changed during a review)
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -32,7 +37,7 @@ jobs:
     name: Find the owner's and the bot's pull requests to review
     if: >-
       github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner)
+      || (github.event_name == 'workflow_dispatch' && (github.actor == github.repository_owner || github.actor_id == '41898282'))
       || (github.event_name == 'pull_request' && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository
           && (github.event.pull_request.user.login == github.repository_owner || github.event.pull_request.user.login == 'vinceamstoutz-github-ai-bot[bot]'))
@@ -91,6 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
+      actions: write
       contents: read
       id-token: write
     strategy:
@@ -216,8 +222,15 @@ jobs:
           HEAD: ${{ matrix.head }}
           SLUG: ${{ steps.write-token.outputs.app-slug }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DESCRIPTION_ONLY: ${{ inputs.description-only == true }}
+          DISPATCH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.repository }}
         run: |
           payload=$(python3 -I bot/scripts/review-payload.py "$OUT/review.json" "$CONTEXT/files.json" "$HEAD" "_Reviewed by vinceAmstoutz GitHub AI bot · [run]($RUN_URL)_")
+          if [ "$DESCRIPTION_ONLY" = true ]; then
+            payload=''
+            echo 'Description pass only: no review posted.'
+          fi
           if [ -n "$payload" ]; then
             printf '%s' "$payload" | gh api "repos/$REPO/pulls/$NUMBER/reviews" --input - --silent
             echo "Posted a review with $(printf '%s' "$payload" | jq '.comments | length') inline comments."
@@ -240,7 +253,10 @@ jobs:
             if [ "$current" = "$(jq -r '.body // ""' "$CONTEXT/pull-request.json")" ]; then
               gh api -X PATCH "repos/$REPO/pulls/$NUMBER" -F body=@"$OUT/pr-body.md" --silent
             else
-              echo 'The description changed during the review; left as is.'
+              echo 'The description changed during the review: giving the current one the format again in a minute.'
+              sleep 60
+              GH_TOKEN=$DISPATCH_TOKEN gh workflow run review.yaml -R "$GITHUB_REPOSITORY" \
+                -f repository="$TARGET" -f number="$NUMBER" -f again=true -f description-only=true
             fi
           fi
           gh api "repos/$REPO/check-runs" -f name='Bot review' -f head_sha="$HEAD" -f status=completed -f conclusion="$conclusion" \
