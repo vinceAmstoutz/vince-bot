@@ -246,7 +246,8 @@ jobs:
             thread=$(printf '%s' "$item" | jq -r .thread)
             jq -e --arg id "$thread" 'any(.[]; .id == $id and (.isResolved | not))' "$CONTEXT/previous-threads.json" > /dev/null || continue
             mark=$(printf '%s' "$item" | jq -r 'if .outcome == "declined" then "❌ " + ((.note // "") | .[0:150] | if . == "" then "Not changed." else . end) else "✅ " + ((.note // "") | .[0:150] | if . == "" then "Fixed." else . end) end')
-            if error=$(gh api graphql -f id="$thread" -f body="$mark" -f query='mutation($id: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) { comment { id } } }' --silent 2>&1) \
+            answered=$(jq -r --arg id "$thread" --arg bot "$SLUG" 'any(.[]; .id == $id and (.replies[-1].author // "") == $bot and ((.replies[-1].body // "") | test("^(✅|❌)")))' "$CONTEXT/previous-threads.json")
+            if { [ "$answered" = true ] || error=$(gh api graphql -f id="$thread" -f body="$mark" -f query='mutation($id: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) { comment { id } } }' --silent 2>&1); } \
               && error=$(gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent 2>&1); then
               resolved=$(printf '%s' "$resolved" | jq -c --arg id "$thread" '. + [$id]')
             else
