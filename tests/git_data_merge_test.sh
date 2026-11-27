@@ -41,6 +41,7 @@ git -C "$r" commit -qm pr
 git -C "$r" checkout -q 1.x
 echo b > "$r/CHANGELOG.md"
 echo é > "$r/a résumé.md"
+echo q > "$r/say \"hi\".md"
 printf '#!/bin/sh\n' > "$r/tool"
 chmod 755 "$r/tool"
 git -C "$r" rm -q gone
@@ -49,13 +50,14 @@ git -C "$r" commit -qm other
 git -C "$r" checkout -q pr
 git -C "$r" merge -q --no-commit --no-ff 1.x > /dev/null
 
-commit=$(sh "$root/scripts/git-data-merge.sh" "$r" o/r feat/x head base-sha 'Merge 1.x into feat/x')
+commit=$(bash "$root/scripts/git-data-merge.sh" "$r" o/r feat/x head base-sha 'Merge 1.x into feat/x')
 [ "$commit" = merge-commit ] || fail "printed $commit"
 grep '^repos/o/r/git/trees ' "$CALLS" | cut -d' ' -f2- | jq -e '
   .base_tree == "head-tree" and (.tree | sort_by(.path)) == [
     {path: "CHANGELOG.md", mode: "100644", type: "blob", sha: "blob-b"},
     {path: "a résumé.md", mode: "100644", type: "blob", sha: "blob-é"},
     {path: "gone", mode: "100644", type: "blob", sha: null},
+    {path: "say \"hi\".md", mode: "100644", type: "blob", sha: "blob-q"},
     {path: "tool", mode: "100755", type: "blob", sha: "blob-#!/bin/sh"}
   ]' > /dev/null || fail "tree $(grep '^repos/o/r/git/trees ' "$CALLS")"
 grep '^repos/o/r/git/commits ' "$CALLS" | cut -d' ' -f2- \

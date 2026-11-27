@@ -24,7 +24,7 @@ repo() { # name: a repository whose 1.x and pr branches both add a CHANGELOG bul
 }
 
 repo union
-sh "$root/scripts/merge-base-branch.sh" "$work/union" 1.x CHANGELOG.md || fail 'union conflict not resolved'
+bash "$root/scripts/merge-base-branch.sh" "$work/union" 1.x CHANGELOG.md || fail 'union conflict not resolved'
 [ "$(tail -n 2 "$work/union/CHANGELOG.md")" = "$(printf -- '- Base entry.\n- PR entry.')" ] || fail "kept $(cat "$work/union/CHANGELOG.md")"
 [ -z "$(git -C "$work/union" diff --name-only --diff-filter=U)" ] || fail 'conflict left unmerged'
 git -C "$work/union" rev-parse -q --verify MERGE_HEAD > /dev/null || fail 'not left as a merge in progress'
@@ -39,7 +39,7 @@ printf '1.x\n' > "$work/code/other"
 git -C "$work/code" add other
 git -C "$work/code" commit -qm other
 git -C "$work/code" checkout -q pr
-sh "$root/scripts/merge-base-branch.sh" "$work/code" 1.x CHANGELOG.md > "$work/code.out" 2> /dev/null || status=$?
+bash "$root/scripts/merge-base-branch.sh" "$work/code" 1.x CHANGELOG.md > "$work/code.out" 2> /dev/null || status=$?
 [ "$status" = 3 ] || fail "a conflict outside the scriptable paths exited $status"
 [ "$(cat "$work/code.out")" = "$(printf 'CHANGELOG.md\nother')" ] || fail "printed $(cat "$work/code.out")"
 [ -z "$(git -C "$work/code" status --porcelain)" ] || fail 'the merge was not aborted'
@@ -52,7 +52,7 @@ sed -i 's/Old entry/Old entry, edited on 1.x/' "$work/edit/CHANGELOG.md"
 git -C "$work/edit" commit -qam edit
 git -C "$work/edit" checkout -q pr
 status=0
-sh "$root/scripts/merge-base-branch.sh" "$work/edit" 1.x CHANGELOG.md > /dev/null 2>&1 || status=$?
+bash "$root/scripts/merge-base-branch.sh" "$work/edit" 1.x CHANGELOG.md > /dev/null 2>&1 || status=$?
 [ "$status" = 3 ] || fail "a conflict that edits a line exited $status"
 [ -z "$(git -C "$work/edit" status --porcelain)" ] || fail 'the edit merge was not aborted'
 
@@ -71,7 +71,7 @@ git -C "$r" checkout -q 1.x
 { echo '<?php'; echo 'return ['; entry a; entry base; echo '];'; } > "$r/list.php"
 git -C "$r" commit -qam other
 git -C "$r" checkout -q pr
-sh "$root/scripts/merge-base-branch.sh" "$r" 1.x list.php || fail 'entry conflict not resolved'
+bash "$root/scripts/merge-base-branch.sh" "$r" 1.x list.php || fail 'entry conflict not resolved'
 [ "$(cat "$r/list.php")" = "$({ echo '<?php'; echo 'return ['; entry a; entry base; entry pr; echo '];'; })" ] || fail "entries interleaved: $(cat "$r/list.php")"
 
 git -C "$work/union" merge --abort
@@ -81,7 +81,16 @@ git -C "$work/union" checkout -q 1.x
 git -C "$work/union" mv CHANGELOG.md 'notes é.md'
 git -C "$work/union" commit -qm rename
 git -C "$work/union" checkout -q pr
-sh "$root/scripts/merge-base-branch.sh" "$work/union" 1.x 'notes é.md' > /dev/null || fail 'a conflict in a path with a space and an accent not resolved'
+bash "$root/scripts/merge-base-branch.sh" "$work/union" 1.x 'notes é.md' > /dev/null || fail 'a conflict in a path with a space and an accent not resolved'
 [ "$(tail -n 2 "$work/union/notes é.md")" = "$(printf -- '- Base entry.\n- PR entry.')" ] || fail "kept $(cat "$work/union/notes é.md")"
+
+git -C "$work/union" merge --abort
+git -C "$work/union" mv 'notes é.md' 'say "hi".md'
+git -C "$work/union" commit -qm rename
+git -C "$work/union" checkout -q 1.x
+git -C "$work/union" mv 'notes é.md' 'say "hi".md'
+git -C "$work/union" commit -qm rename
+git -C "$work/union" checkout -q pr
+bash "$root/scripts/merge-base-branch.sh" "$work/union" 1.x 'say "hi".md' > /dev/null || fail 'a conflict in a path git quotes not resolved'
 
 echo 'merge_base_branch_test: ok'

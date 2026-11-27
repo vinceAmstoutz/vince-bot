@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Usage: merge-base-branch.sh <workdir> <base-ref> <scriptable-path>...
 #   Merges <base-ref> into the branch checked out in <workdir> and leaves the merge staged, uncommitted.
 #   A conflict in a <scriptable-path> where the pull request only added lines is resolved by keeping both sides:
@@ -12,21 +12,21 @@ shift 2
 git -C "$workdir" merge --no-commit --no-ff "$base" > /dev/null 2>&1 && exit 0
 
 needs_hand() {
-  printf '%s\n' "$conflicts"
+  tr '\0' '\n' < "$conflicts"
   git -C "$workdir" merge --abort
   echo "::warning::the conflict in $1 cannot be resolved by script" >&2
   exit 3
 }
 
 scriptable=$(printf '%s\n' "$@")
-conflicts=$(git -C "$workdir" -c core.quotePath=false diff --name-only --diff-filter=U)
-while IFS= read -r path; do
+conflicts=$(mktemp)
+trap 'rm -f "$conflicts"' EXIT
+git -C "$workdir" diff --name-only --diff-filter=U -z > "$conflicts"
+while IFS= read -r -d '' path; do
   printf '%s\n' "$scriptable" | grep -qxF -- "$path" || needs_hand "$path"
-done <<PATHS
-$conflicts
-PATHS
+done < "$conflicts"
 
-while IFS= read -r path; do
+while IFS= read -r -d '' path; do
   tmp=$(mktemp -d)
   git -C "$workdir" show ":1:$path" > "$tmp/base"
   git -C "$workdir" show ":2:$path" > "$tmp/ours"
@@ -38,6 +38,4 @@ while IFS= read -r path; do
   cp "$tmp/merged" "$workdir/$path"
   git -C "$workdir" add -- "$path"
   rm -rf "$tmp"
-done <<PATHS
-$conflicts
-PATHS
+done < "$conflicts"

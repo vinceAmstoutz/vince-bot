@@ -112,7 +112,7 @@ jobs:
             git -C target checkout -q --detach "$head"
             git -C target reset -q --hard
             resolved=0
-            sh bot/scripts/merge-base-branch.sh target "origin/$base" $SCRIPTABLE > "$RUNNER_TEMP/paths" || resolved=$?
+            bash bot/scripts/merge-base-branch.sh target "origin/$base" $SCRIPTABLE > "$RUNNER_TEMP/paths" || resolved=$?
             if [ "$resolved" = 3 ]; then
               echo "::notice::#$number has a conflict the script does not resolve: left to the owner"
               if ! gh api "repos/$REPO/issues/$number/comments" --paginate --jq '.[].body' | grep -qF "<!-- bot-conflicts $head -->"; then
@@ -142,7 +142,7 @@ jobs:
               status=1
               continue
             fi
-            if ! commit=$(sh bot/scripts/git-data-merge.sh target "$REPO" "$branch" "$head" \
+            if ! commit=$(bash bot/scripts/git-data-merge.sh target "$REPO" "$branch" "$head" \
               "$(git -C target rev-parse "origin/$base")" "Merge branch '$base' into $branch"); then
               echo "::warning::#$number: its branch moved meanwhile, the next run takes it"
               git -C target merge --abort
