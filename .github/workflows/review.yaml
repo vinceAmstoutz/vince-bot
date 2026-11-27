@@ -240,15 +240,23 @@ jobs:
             conclusion=success
           fi
           resolved='[]'
+          unresolved=0
           for thread in $(jq -r '.resolve // [] | .[]' "$OUT/review.json"); do
             jq -e --arg id "$thread" 'any(.[]; .id == $id and (.isResolved | not))' "$CONTEXT/previous-threads.json" > /dev/null || continue
-            if gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent; then
+            if error=$(gh api graphql -f id="$thread" -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' --silent 2>&1); then
               resolved=$(printf '%s' "$resolved" | jq -c --arg id "$thread" '. + [$id]')
             else
-              echo '::warning::a fixed review thread could not be resolved'
+              unresolved=$((unresolved + 1))
+              echo "::error::a fixed review thread could not be resolved: $error"
             fi
           done
           echo "Resolved $(printf '%s' "$resolved" | jq length) fixed review threads."
+          title=$(jq -r '.summary' "$OUT/review.json" | head -n 1 | sed -E 's/^[-*#> ]+//; s/\*\*|__|`//g' | cut -c1-120)
+          if [ "$unresolved" -gt 0 ]; then
+            conclusion=failure
+            title="$unresolved fixed review thread(s) could not be resolved"
+            printf '\n\n%s fixed review thread(s) could not be resolved: %s\n' "$unresolved" "$error" >> "$OUT/summary.md"
+          fi
           if [ -s "$OUT/pr-body.md" ] && [ "$(jq -r .approved "$OUT/verdict.json")" = true ]; then
             current=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.body // ""')
             if [ "$current" = "$(jq -r '.body // ""' "$CONTEXT/pull-request.json")" ]; then
@@ -263,5 +271,6 @@ jobs:
           fi
           if [ "$DESCRIPTION_ONLY" != true ]; then
             gh api "repos/$REPO/check-runs" -f name='Bot review' -f head_sha="$HEAD" -f status=completed -f conclusion="$conclusion" \
-              -f "output[title]=$(jq -r '.summary' "$OUT/review.json" | head -n 1 | sed -E 's/^[-*#> ]+//; s/\*\*|__|`//g' | cut -c1-120)" -f "output[summary]=$(cat "$OUT/summary.md")" --silent
+              -f "output[title]=$title" -f "output[summary]=$(cat "$OUT/summary.md")" --silent
           fi
+          [ "$unresolved" = 0 ]
